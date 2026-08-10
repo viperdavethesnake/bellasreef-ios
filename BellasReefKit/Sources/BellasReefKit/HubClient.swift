@@ -135,7 +135,12 @@ public actor HubClient {
         guard let detail = try? response.body.json.detail, let first = detail.first else {
             return "the hub rejected those thresholds"
         }
-        return first.msg
+        // Pydantic prefixes validator failures with "Value error, ". The
+        // sentence after it is written for a person; the prefix is framework
+        // plumbing and reads as noise on a settings screen.
+        let message = first.msg
+        let prefix = "Value error, "
+        return message.hasPrefix(prefix) ? String(message.dropFirst(prefix.count)) : message
     }
 
     // MARK: Alerts

@@ -101,18 +101,28 @@ final class AppModel {
 /// credential itself lives in the Keychain.
 enum HubMemory {
     private static let key = "com.bellasreef.lastHub"
+    private static let nameKey = "com.bellasreef.lastHubName"
 
     static func remember(_ hub: Hub) {
         UserDefaults.standard.set(hub.baseURL.absoluteString, forKey: key)
+        UserDefaults.standard.set(hub.name, forKey: nameKey)
     }
 
+    /// The name is stored alongside the address rather than derived from it.
+    ///
+    /// It used to be `url.host`, which was survivable while discovery produced
+    /// `bellasreef.local` and became wrong the moment discovery started
+    /// resolving to an address — the System tab then showed an IP under the
+    /// heading "Name". A host is not a name; the hub's name comes from the hub.
     static func recall() -> Hub? {
         guard let raw = UserDefaults.standard.string(forKey: key),
               let url = URL(string: raw) else { return nil }
-        return Hub(name: url.host ?? "hub", baseURL: url, discovered: false)
+        let stored = UserDefaults.standard.string(forKey: nameKey)
+        return Hub(name: stored ?? url.host ?? "hub", baseURL: url, discovered: false)
     }
 
     static func forget() {
         UserDefaults.standard.removeObject(forKey: key)
+        UserDefaults.standard.removeObject(forKey: nameKey)
     }
 }

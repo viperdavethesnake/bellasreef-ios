@@ -27,7 +27,7 @@ struct RootView: View {
 struct MainTabs: View {
     var body: some View {
         TabView {
-            Tab("Tank", systemImage: "thermometer.medium") {
+            Tab("Tank", systemImage: "drop.fill") {
                 TankView()
             }
             Tab("Lighting", systemImage: "lightbulb.fill") {

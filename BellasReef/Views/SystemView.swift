@@ -9,6 +9,10 @@ struct SystemView: View {
     @State private var confirmingUnpair = false
     @State private var liveClients: Int?
     @State private var signOutProblem: String?
+    /// The hub's own name, from `/info`. Authoritative regardless of how this
+    /// device found the hub — Bonjour, a typed address, or a restored pairing.
+    @State private var hubName: String?
+    @State private var hubNameFailed = false
 
     var body: some View {
         @Bindable var preferences = preferences
@@ -16,8 +20,18 @@ struct SystemView: View {
         NavigationStack {
             List {
                 Section("Hub") {
+                    LabeledContent("Name") {
+                        if let hubName {
+                            Text(hubName).foregroundStyle(Theme.primaryText)
+                        } else if hubNameFailed {
+                            // Honest rather than convenient: showing the address
+                            // here is what produced "Name: 192.168.254.236".
+                            Text("Unavailable").foregroundStyle(Theme.tertiaryText)
+                        } else {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
                     if case let .paired(hub) = model.phase {
-                        LabeledContent("Name", value: hub.name)
                         LabeledContent("Address", value: hub.baseURL.absoluteString)
                     }
                 }
@@ -67,7 +81,14 @@ struct SystemView: View {
             .scrollContentBackground(.hidden)
             .reefBackground()
             .navigationTitle("System")
-            .task { liveClients = await model.liveClientCount() }
+            .task {
+                liveClients = await model.liveClientCount()
+                do {
+                    hubName = try await model.client?.info().name
+                } catch {
+                    hubNameFailed = true
+                }
+            }
             .confirmationDialog(
                 isLastDevice ? "Sign out the last device?" : "Sign out of this hub?",
                 isPresented: $confirmingUnpair,

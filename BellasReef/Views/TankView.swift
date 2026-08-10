@@ -33,7 +33,11 @@ struct TankView: View {
                 }
             }
             .reefBackground()
-            .navigationTitle("Tank")
+            // No navigation bar. It contributed an empty band above the status
+            // line and a full-width seam where its background met the content,
+            // for a title the tab bar already provides. The screen now begins at
+            // the safe area with the status line.
+            .toolbar(.hidden, for: .navigationBar)
         }
     }
 
@@ -41,6 +45,10 @@ struct TankView: View {
     private func content(monitor: TankMonitor, catalog: DeviceCatalog) -> some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 24) {
+                // In the stack rather than a safeAreaInset: an inset paints its
+                // own full-width background, and any colour that was not exactly
+                // the page background drew a seam across the screen.
+                StatusLine(monitor: monitor)
                 AlertBannerStack(monitor: monitor, catalog: catalog)
 
                 if monitor.probes.isEmpty {
@@ -64,7 +72,7 @@ struct TankView: View {
                 LightSection(monitor: monitor)
             }
             .padding(.horizontal, 20)
-            .padding(.top, 16)
+            .padding(.top, 8)
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -75,7 +83,6 @@ struct TankView: View {
             await monitor.reconnect()
             await catalog.refresh()
         }
-        .safeAreaInset(edge: .top) { StatusLine(monitor: monitor) }
         .sheet(item: Binding(get: { inspecting.map(Identified.init) },
                              set: { inspecting = $0?.id })) { target in
             SensorDetailSheet(sensorId: target.id, monitor: monitor, catalog: catalog)
@@ -126,6 +133,18 @@ struct StatusLine: View {
     let monitor: TankMonitor
 
     var body: some View {
+        // A clock, for the same reason the hero has one. `tone` and
+        // `statusLine` are computed against `Date()`, and staleness arrives
+        // through the *absence* of frames — so nothing mutates observed state
+        // and nothing triggers a redraw. Without this the line sat on a teal
+        // "All clear" beside a dimmed reading stamped "1m ago": the staleness
+        // indicator had itself gone stale.
+        TimelineView(.periodic(from: .now, by: 5)) { _ in
+            line
+        }
+    }
+
+    private var line: some View {
         HStack(spacing: 8) {
             Circle()
                 .fill(monitor.tone.color)
@@ -135,11 +154,10 @@ struct StatusLine: View {
                 .foregroundStyle(monitor.tone == .allClear ? Theme.secondaryText : monitor.tone.color)
             Spacer()
         }
-        .padding(.horizontal, 20)
-        .padding(.vertical, 10)
-        // Solid, not `.bar`. Design brief §7.6: glass belongs to the tab bar and
-        // toolbars only. This displays data, so it is content, so it is opaque.
-        .background(Theme.surface)
+        .padding(.vertical, 4)
+        // No background of its own. Design brief §7.6 rules out glass on content;
+        // a *different solid* is not much better when it spans the width — it
+        // reads as a bar the screen does not have.
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Status: \(monitor.statusLine)")
     }
@@ -218,6 +236,40 @@ struct AlertBanner: View {
 }
 
 /// The hero reading, tappable through to its detail sheet.
+/// Range and span under the trace.
+struct SparklineCaption: View {
+    let values: [Double]
+    let unit: TemperatureUnitPreference
+    let samples: Int
+    let cadence: Double?
+
+    var body: some View {
+        if let low = values.min(), let high = values.max() {
+            Text(caption(low: low, high: high))
+                .font(Theme.caption)
+                .foregroundStyle(Theme.tertiaryText)
+        }
+    }
+
+    private func caption(low: Double, high: Double) -> String {
+        let symbol = TemperatureDisplay.symbol(for: unit)
+        let range = "\(TemperatureDisplay.value(celsius: low, as: unit))–"
+            + "\(TemperatureDisplay.value(celsius: high, as: unit))\(symbol)"
+        // The span is derived from the probe's declared cadence rather than
+        // assumed. Claiming "24h" for what is actually twenty minutes of buffer
+        // would be the same class of lie as a stale reading shown as current.
+        guard let cadence, cadence > 0, samples > 1 else { return range }
+        let seconds = Double(samples - 1) * cadence
+        return "\(range) · last \(Self.span(seconds))"
+    }
+
+    private static func span(_ seconds: Double) -> String {
+        if seconds < 90 { return "\(Int(seconds))s" }
+        if seconds < 5400 { return "\(Int(seconds / 60))m" }
+        return "\(Int(seconds / 3600))h"
+    }
+}
+
 struct PrimaryReading: View {
     let monitor: TankMonitor
     let catalog: DeviceCatalog
@@ -299,10 +351,21 @@ struct PrimaryReading: View {
                 // for it leaves a band of empty space under the hero that reads
                 // as something failing to load.
                 if monitor.history(sensorId).count > 1 {
-                    Sparkline(values: monitor.history(sensorId))
-                        .frame(height: 40)
-                        .padding(.top, 6)
-                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Sparkline(values: monitor.history(sensorId))
+                            .frame(height: 40)
+                        // A line with no scale is decoration. The range is the
+                        // smallest thing that makes it readable: it says whether
+                        // that wobble is a tenth of a degree or three.
+                        SparklineCaption(
+                            values: monitor.history(sensorId),
+                            unit: unit,
+                            samples: monitor.history(sensorId).count,
+                            cadence: catalog.device(sensorId)?.pollIntervalS
+                        )
+                    }
+                    .padding(.top, 6)
+                    .accessibilityHidden(true)
                 }
             }
             .accessibilityElement(children: .combine)

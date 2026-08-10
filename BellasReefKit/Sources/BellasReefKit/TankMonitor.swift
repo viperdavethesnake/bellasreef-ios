@@ -141,6 +141,10 @@ public final class TankMonitor {
         if probes.values.contains(where: { if case .faulted = $0 { return true } else { return false } }) {
             return .attention
         }
+        // A connected hub with no probe reporting is not "all clear". The tank
+        // is unmonitored, and painting that teal says the opposite of what is
+        // true — the same failure as showing a stale number as current.
+        if probes.isEmpty { return .attention }
         switch connection {
         case .live where !everythingIsStale: return .allClear
         default: return .attention

@@ -50,6 +50,8 @@ struct SensorDetailSheet: View {
                 Section {
                     TextField("Display tank", text: $name)
                         .textInputAutocapitalization(.words)
+                        .foregroundStyle(Theme.accent)
+                        .accessibilityIdentifier("sensor-name")
                 } header: {
                     Text("Name")
                 } footer: {
@@ -57,9 +59,9 @@ struct SensorDetailSheet: View {
                 }
 
                 Section {
-                    thresholdField("Minimum", text: $minimum)
-                    thresholdField("Maximum", text: $maximum)
-                    thresholdField("Clear margin", text: $clearMargin)
+                    thresholdField("Minimum", text: $minimum, identifier: "threshold-minimum")
+                    thresholdField("Maximum", text: $maximum, identifier: "threshold-maximum")
+                    thresholdField("Clear margin", text: $clearMargin, identifier: "threshold-margin")
                 } header: {
                     Text("Alert thresholds (\(TemperatureDisplay.symbol(for: unit)))")
                 } footer: {
@@ -74,6 +76,7 @@ struct SensorDetailSheet: View {
                         Label(problem, systemImage: "exclamationmark.triangle.fill")
                             .font(.callout)
                             .foregroundStyle(Theme.attention)
+                            .accessibilityIdentifier("threshold-error")
                     }
                 }
 
@@ -100,6 +103,7 @@ struct SensorDetailSheet: View {
                         ProgressView()
                     } else {
                         Button("Save") { Task { await save() } }
+                            .accessibilityIdentifier("save-sensor")
                     }
                 }
             }
@@ -122,11 +126,22 @@ struct SensorDetailSheet: View {
         }
     }
 
-    private func thresholdField(_ label: String, text: Binding<String>) -> some View {
+    private func thresholdField(
+        _ label: String, text: Binding<String>, identifier: String
+    ) -> some View {
         LabeledContent(label) {
             TextField("—", text: text)
                 .keyboardType(.numbersAndPunctuation)
                 .multilineTextAlignment(.trailing)
+                // Tinted, the way Settings tints an editable value. In plain
+                // primary text these read as a read-out — the review found them
+                // indistinguishable from the "Now" row directly above, which
+                // genuinely is not editable.
+                .foregroundStyle(Theme.accent)
+                // Identifiers rather than positional matching: a UI test that
+                // finds "the second text field" breaks the moment a row moves,
+                // and then reports a layout change as a write failure.
+                .accessibilityIdentifier(identifier)
         }
         .frame(minHeight: 44)
     }
