@@ -7,6 +7,8 @@ struct SystemView: View {
     @Environment(AppModel.self) private var model
     @Environment(Preferences.self) private var preferences
     @State private var confirmingUnpair = false
+    @State private var liveClients: Int?
+    @State private var signOutProblem: String?
 
     var body: some View {
         @Bindable var preferences = preferences
@@ -38,35 +40,61 @@ struct SystemView: View {
                 }
 
                 Section {
-                    Button("Unpair this device", role: .destructive) {
+                    // Standard iOS destructive styling, per design brief §2 as
+                    // amended: control-red is the platform's word for "this
+                    // deletes something", and is not the safety red that governs
+                    // status and data.
+                    Button("Sign out of this hub", role: .destructive) {
                         confirmingUnpair = true
                     }
                     // §7.4: nothing destructive fires on a single tap, and the
                     // row keeps a 44pt target.
                     .frame(minHeight: 44)
+
+                    if let signOutProblem {
+                        Label(signOutProblem, systemImage: "exclamationmark.triangle.fill")
+                            .font(Theme.caption)
+                            .foregroundStyle(Theme.attention)
+                    }
                 } footer: {
-                    Text("Forgets the credential on this phone. The hub keeps its "
-                         + "record, so pairing again needs approval from another "
-                         + "device.")
+                    Text(isLastDevice
+                         ? "This is the only device the hub still trusts. Signing out "
+                           + "revokes it, and pairing again will need hub access."
+                         : "Revokes this device on the hub and forgets the credential "
+                           + "here. Another paired device can approve it again later.")
                 }
             }
             .scrollContentBackground(.hidden)
             .reefBackground()
             .navigationTitle("System")
+            .task { liveClients = await model.liveClientCount() }
             .confirmationDialog(
-                "Unpair this device?",
+                isLastDevice ? "Sign out the last device?" : "Sign out of this hub?",
                 isPresented: $confirmingUnpair,
                 titleVisibility: .visible
             ) {
-                Button("Unpair", role: .destructive) {
-                    Task { await model.unpair() }
+                Button("Sign out", role: .destructive) {
+                    Task { signOutProblem = await model.unpair() }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("You will need another paired device to approve this one again.")
+                // Naming the exact command matters. The alternative — which is
+                // what shipped, and what locked David out — is telling somebody
+                // to wait for an approval that no device can give.
+                Text(isLastDevice
+                     ? "No other device is paired, so nothing can approve this one "
+                       + "again. To get back in you will need to run `bellasreef pair` "
+                       + "on the hub."
+                     : "Another paired device can approve this one again later.")
             }
         }
     }
+
+    /// True when this is the only client the hub still trusts.
+    ///
+    /// The caller is authenticated, so it is one of the live clients: a count of
+    /// one means it is the only one.
+    private var isLastDevice: Bool { (liveClients ?? 2) <= 1 }
 
     /// Says what `automatic` actually resolves to on *this* device, rather than
     /// leaving the operator to discover it by switching and watching.

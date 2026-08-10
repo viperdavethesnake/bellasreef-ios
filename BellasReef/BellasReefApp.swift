@@ -13,6 +13,9 @@ struct BellasReefApp: App {
             RootView()
                 .environment(model)
                 .environment(preferences)
+                // The model needs preferences too — the primary-sensor choice
+                // is read while assembling the Tank tab, not just in Settings.
+                .task { model.preferences = preferences }
                 // Dark is primary (design brief §2). Declared here as well as in
                 // Info.plist so previews and the simulator agree with the device.
                 .preferredColorScheme(.dark)
@@ -37,6 +40,10 @@ final class AppModel {
     var phase: Phase = .choosingHub
     private(set) var client: HubClient?
     private(set) var monitor: TankMonitor?
+    private(set) var catalog: DeviceCatalog?
+    /// Held here so views can reach preferences through the one model they
+    /// already have, rather than every sheet re-declaring an @Environment.
+    var preferences: Preferences?
 
     /// Restore a previous pairing, if the Keychain still holds a credential.
     ///
@@ -55,17 +62,36 @@ final class AppModel {
         self.client = client
         let monitor = TankMonitor(client: client, stream: StreamClient(baseURL: hub.baseURL))
         self.monitor = monitor
+        self.catalog = DeviceCatalog(client: client)
         phase = .paired(hub)
         monitor.start()
     }
 
-    func unpair() async {
+    /// How many devices the hub still trusts, for the sign-out warning.
+    func liveClientCount() async -> Int? {
+        try? await client?.liveClientCount()
+    }
+
+    /// Sign out, revoking on the hub first.
+    ///
+    /// Returns an error string when the hub could not be told. The local
+    /// credential is cleared either way — a sign-out that silently does nothing
+    /// is worse — but the operator needs to know a stale record was left
+    /// behind, because that record still counts as a live approver.
+    func unpair() async -> String? {
         monitor?.stop()
-        try? await client?.forget()
+        var failure: String?
+        do {
+            try await client?.signOut()
+        } catch {
+            failure = "\(error)"
+        }
         client = nil
         monitor = nil
+        catalog = nil
         phase = .choosingHub
         HubMemory.forget()
+        return failure
     }
 }
 

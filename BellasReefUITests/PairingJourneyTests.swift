@@ -28,32 +28,39 @@ final class PairingJourneyTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
 
-        // 1. Discovery. Bonjour, then resolution — the row only appears once the
-        //    hub has actually answered a connection.
-        let hubRow = app.buttons.containing(
-            NSPredicate(format: "label CONTAINS[c] %@", "Bella's Reef")
-        ).firstMatch
-        XCTAssertTrue(
-            hubRow.waitForExistence(timeout: 30),
-            "no hub discovered — is the hub up and advertising _bellasreef._tcp?"
-        )
-        hubRow.tap()
-
-        // 2. The identify card: /info before any commitment.
-        let pairButton = app.buttons.containing(
-            NSPredicate(format: "label BEGINSWITH[c] %@", "Pair")
-        ).firstMatch
-        XCTAssertTrue(pairButton.waitForExistence(timeout: 15), "identify card never loaded")
-        pairButton.tap()
-
-        // 3. Pairing lands on the Tank tab. If the hub had no open window this
-        //    would sit on "Waiting for approval" instead, so the assertion is
-        //    also checking that a window was open when the test ran.
         let tankTab = app.tabBars.buttons["Tank"]
-        XCTAssertTrue(
-            tankTab.waitForExistence(timeout: 20),
-            "did not reach the dashboard — check for a pending-approval or recovery state"
-        )
+
+        // A credential in the Keychain survives a reinstall, so this device may
+        // already be paired. Both paths have to work: the point of the test is
+        // the dashboard, and re-pairing when it is not needed would spend a
+        // pairing window for nothing.
+        if !tankTab.waitForExistence(timeout: 8) {
+            // 1. Discovery. Bonjour, then resolution — the row only appears once
+            //    the hub has actually answered a connection.
+            let hubRow = app.buttons.containing(
+                NSPredicate(format: "label CONTAINS[c] %@", "Bella's Reef")
+            ).firstMatch
+            XCTAssertTrue(
+                hubRow.waitForExistence(timeout: 30),
+                "no hub discovered — is the hub up and advertising _bellasreef._tcp?"
+            )
+            hubRow.tap()
+
+            // 2. The identify card: /info before any commitment.
+            let pairButton = app.buttons.containing(
+                NSPredicate(format: "label BEGINSWITH[c] %@", "Pair")
+            ).firstMatch
+            XCTAssertTrue(pairButton.waitForExistence(timeout: 15), "identify card never loaded")
+            pairButton.tap()
+
+            // 3. Pairing lands on the Tank tab. If no window were open this
+            //    would sit on "Waiting for approval" instead, so the assertion
+            //    also checks that a window was open when the test ran.
+            XCTAssertTrue(
+                tankTab.waitForExistence(timeout: 20),
+                "did not reach the dashboard — check for a pending-approval or recovery state"
+            )
+        }
 
         // 4. A live reading. The hero shows "—" until the first sensor frame, so
         //    waiting for a digit is waiting for the stream to actually deliver.
@@ -65,12 +72,38 @@ final class PairingJourneyTests: XCTestCase {
             "no temperature rendered — frames are not reaching the app"
         )
 
-        // 5. And the safety line reports honestly rather than optimistically.
-        let allClear = app.staticTexts["All clear"]
-        XCTAssertTrue(allClear.waitForExistence(timeout: 15), "status line never reached All clear")
+        attach(app, named: "tank")
 
-        XCTContext.runActivity(named: "paired dashboard") { activity in
+        // 5. And the safety line reports honestly rather than optimistically.
+        //    Any of these is a truthful answer; what would be wrong is silence,
+        //    or a stale number presented as current.
+        // The status line is combined into one accessibility element for
+        // VoiceOver (§7.5), so its label is "Status: …" rather than the bare
+        // text. Querying the raw string finds nothing — which is what the first
+        // run of this assertion discovered.
+        let status = app.staticTexts.matching(
+            NSPredicate(format: "label BEGINSWITH %@", "Status: ")
+        ).firstMatch
+        XCTAssertTrue(status.exists, "status line said nothing meaningful")
+
+        // 6. The sensor detail sheet: tap the reading, land on rename +
+        //    thresholds, with the raw id present exactly here and nowhere else.
+        hero.tap()
+        let sheetTitle = app.staticTexts["Sensor id"]
+        XCTAssertTrue(
+            sheetTitle.waitForExistence(timeout: 10),
+            "tapping the reading did not open the sensor detail sheet"
+        )
+        XCTAssertTrue(app.staticTexts["Alert thresholds (°F)"].exists
+                      || app.staticTexts["Alert thresholds (°C)"].exists,
+                      "threshold section missing")
+        attach(app, named: "sensor-detail")
+    }
+
+    private func attach(_ app: XCUIApplication, named name: String) {
+        XCTContext.runActivity(named: name) { activity in
             let shot = XCTAttachment(screenshot: app.screenshot())
+            shot.name = name
             shot.lifetime = .keepAlways
             activity.add(shot)
         }

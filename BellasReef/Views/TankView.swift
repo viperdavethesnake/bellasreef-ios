@@ -6,31 +6,25 @@ import SwiftUI
 
 /// Home. One glance = is my tank okay (design brief §3).
 ///
-/// All five §7.1 states are here rather than implied: `connecting` before the
-/// first frame, `waiting` when the socket is up but the probe has not reported,
-/// `populated`, the amber disconnected line, and the terminal contract
-/// mismatch. None of them is a bare spinner.
+/// Composition, top to bottom: status line, alerts, the primary reading, any
+/// other probes, then light. Nothing is centred in the viewport — a hero
+/// floating in the middle left the bottom third empty on every device, which
+/// read as a loading state that never finished.
+///
+/// All five §7.1 states are present: `connecting` before the first frame,
+/// `waiting` when the socket is up but no probe has reported, populated, the
+/// amber disconnected line, and the terminal contract mismatch.
 struct TankView: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var inspecting: String?
 
     var body: some View {
         NavigationStack {
             Group {
-                if let monitor = model.monitor {
-                    ScrollView {
-                        VStack(spacing: 32) {
-                            // Banners sit above the hero, never over it — §7.7:
-                            // an alert must not cover the data it describes.
-                            AlertBannerStack(monitor: monitor)
-                            TemperatureHero(monitor: monitor)
-                            SpectrumBar(monitor: monitor)
-                            Spacer(minLength: 0)
-                        }
-                        .padding(.top, 20)
-                    }
-                    .safeAreaInset(edge: .top) { StatusLine(monitor: monitor) }
+                if let monitor = model.monitor, let catalog = model.catalog {
+                    content(monitor: monitor, catalog: catalog)
                 } else {
-                    // Error state: paired, but no monitor could be built.
                     ContentUnavailableView(
                         "Not connected",
                         systemImage: "wifi.slash",
@@ -41,6 +35,89 @@ struct TankView: View {
             .reefBackground()
             .navigationTitle("Tank")
         }
+    }
+
+    @ViewBuilder
+    private func content(monitor: TankMonitor, catalog: DeviceCatalog) -> some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 24) {
+                AlertBannerStack(monitor: monitor, catalog: catalog)
+
+                if monitor.probes.isEmpty {
+                    WaitingForSensors(monitor: monitor)
+                } else {
+                    PrimaryReading(
+                        monitor: monitor,
+                        catalog: catalog,
+                        sensorId: primaryId(monitor),
+                        onInspect: { inspecting = $0 }
+                    )
+
+                    OtherSensors(
+                        monitor: monitor,
+                        catalog: catalog,
+                        primary: primaryId(monitor),
+                        onInspect: { inspecting = $0 }
+                    )
+                }
+
+                LightSection(monitor: monitor)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 32)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // Pull-to-refresh on a pushed stream means "prove the connection is
+        // real": drop the socket and watch it come back, and re-read the
+        // configuration that does not push.
+        .refreshable {
+            await monitor.reconnect()
+            await catalog.refresh()
+        }
+        .safeAreaInset(edge: .top) { StatusLine(monitor: monitor) }
+        .sheet(item: Binding(get: { inspecting.map(Identified.init) },
+                             set: { inspecting = $0?.id })) { target in
+            SensorDetailSheet(sensorId: target.id, monitor: monitor, catalog: catalog)
+        }
+        .task { await catalog.refresh() }
+        // REST data does not push, so it goes stale in the background. Coming
+        // back to the app is the moment the operator expects it to be current.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await catalog.refresh() } }
+        }
+    }
+
+    /// The chosen probe, or the first reporting one when nothing is chosen.
+    private func primaryId(_ monitor: TankMonitor) -> String {
+        let preferred = model.preferences?.primarySensorId
+        if let preferred, monitor.probes[preferred] != nil { return preferred }
+        return monitor.sensorIds.first ?? ""
+    }
+}
+
+/// `String` is not `Identifiable`; this is the smallest honest wrapper.
+private struct Identified: Identifiable {
+    let id: String
+}
+
+/// Empty state: the socket is up and no probe has spoken yet.
+struct WaitingForSensors: View {
+    let monitor: TankMonitor
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("No sensors reporting")
+                .font(.title3.weight(.semibold))
+                .foregroundStyle(Theme.primaryText)
+            Text(monitor.connection == .live
+                 ? "The hub is connected but no probe has sent a reading yet."
+                 : "Waiting for the hub.")
+                .font(Theme.caption)
+                .foregroundStyle(Theme.secondaryText)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 24)
     }
 }
 
@@ -71,43 +148,43 @@ struct StatusLine: View {
 /// Amber banners for open threshold breaches (§7.7).
 struct AlertBannerStack: View {
     let monitor: TankMonitor
-    @Environment(Preferences.self) private var preferences
+    let catalog: DeviceCatalog
+    @Environment(AppModel.self) private var model
 
     var body: some View {
         VStack(spacing: 10) {
             ForEach(monitor.alerts) { alert in
-                AlertBanner(alert: alert, unit: preferences.temperatureUnit)
+                AlertBanner(
+                    alert: alert,
+                    name: catalog.name(for: alert.deviceId),
+                    unit: model.preferences?.temperatureUnit ?? .automatic
+                )
             }
         }
-        .padding(.horizontal, 20)
-        // Reduce Motion turns the slide into a plain appearance (§7.3).
         .animation(.snappy, value: monitor.alerts)
     }
 }
 
 struct AlertBanner: View {
     let alert: TankMonitor.Alert
+    let name: String
     let unit: TemperatureUnitPreference
 
-    /// "22.0 °C — below 24.0 °C min".
+    /// "Display tank · 22.0 °C — below 24.0 °C min".
     ///
     /// §7.7 wants the reading *and* the threshold, not "alert". The operator
     /// needs to know how far out of range the tank is to decide whether this is
     /// a look-in-the-morning or a get-up-now.
     private var headline: String {
         guard alert.unit == "degC" else {
-            // An unexpected unit is shown raw rather than mislabelled. Silently
-            // converting a pH reading as if it were Celsius would be worse than
-            // ugly.
             return "\(alert.value) \(alert.unit) — \(alert.isHigh ? "above" : "below") "
                 + "\(alert.threshold) \(alert.unit)"
         }
         let reading = TemperatureDisplay.value(celsius: alert.value, as: unit)
         let limit = TemperatureDisplay.value(celsius: alert.threshold, as: unit)
         let symbol = TemperatureDisplay.symbol(for: unit)
-        let side = alert.isHigh ? "above" : "below"
-        let bound = alert.isHigh ? "max" : "min"
-        return "\(reading)\(symbol) — \(side) \(limit)\(symbol) \(bound)"
+        return "\(reading)\(symbol) — \(alert.isHigh ? "above" : "below") "
+            + "\(limit)\(symbol) \(alert.isHigh ? "max" : "min")"
     }
 
     var body: some View {
@@ -115,12 +192,14 @@ struct AlertBanner: View {
             Image(systemName: alert.isHigh ? "thermometer.sun.fill" : "thermometer.snowflake")
                 .foregroundStyle(Theme.attention)
             VStack(alignment: .leading, spacing: 2) {
+                Text(name)
+                    .font(Theme.caption.weight(.semibold))
+                    .foregroundStyle(Theme.attention)
                 Text(headline)
                     .font(.callout.weight(.medium))
                     .foregroundStyle(Theme.primaryText)
                 // The age. A breach that started four hours ago is a different
-                // situation from one that started thirty seconds ago, and the
-                // banner looks identical without this.
+                // situation from one that started thirty seconds ago.
                 Text(alert.raisedAt, format: .relative(presentation: .numeric))
                     .font(Theme.caption)
                     .foregroundStyle(Theme.secondaryText)
@@ -134,105 +213,186 @@ struct AlertBanner: View {
             RoundedRectangle(cornerRadius: 12).stroke(Theme.attention.opacity(0.5), lineWidth: 1)
         )
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Alert. \(headline).")
+        .accessibilityLabel("Alert on \(name). \(headline).")
     }
 }
 
-struct TemperatureHero: View {
+/// The hero reading, tappable through to its detail sheet.
+struct PrimaryReading: View {
     let monitor: TankMonitor
-    @Environment(Preferences.self) private var preferences
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let catalog: DeviceCatalog
+    let sensorId: String
+    let onInspect: (String) -> Void
 
-    /// Scales with Dynamic Type (§7.5). A fixed 72pt system font ignores the
-    /// user's text size entirely, which is exactly what the brief rules out.
+    @Environment(AppModel.self) private var model
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ScaledMetric(relativeTo: .largeTitle) private var heroSize = Theme.heroNumberSize
 
+    private var unit: TemperatureUnitPreference {
+        model.preferences?.temperatureUnit ?? .automatic
+    }
+
     var body: some View {
-        // A ticking clock so the age stamp ages. Without it "2m ago" stays "2m
-        // ago" until the next frame arrives — and the whole point of the stamp
-        // is the case where frames have stopped.
-        TimelineView(.periodic(from: .now, by: 10)) { context in
-            VStack(spacing: 4) {
-                content(now: context.date)
+        Button { onInspect(sensorId) } label: {
+            TimelineView(.periodic(from: .now, by: 10)) { context in
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(catalog.name(for: sensorId))
+                        .font(Theme.sectionTitle)
+                        .foregroundStyle(Theme.secondaryText)
+                    reading(now: context.date)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .animation(reduceMotion ? nil : .snappy, value: monitor.probe(sensorId))
             }
-            .animation(reduceMotion ? nil : .snappy, value: monitor.probe)
         }
+        .buttonStyle(.plain)
+        .accessibilityHint("Opens sensor settings")
     }
 
     @ViewBuilder
-    private func content(now: Date) -> some View {
-        switch monitor.probe {
+    private func reading(now: Date) -> some View {
+        switch monitor.probe(sensorId) {
         case .waiting:
-            // Loading state. Says what it is waiting for, not just "…".
-            VStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text("—")
                     .font(.system(size: heroSize, weight: .light, design: .rounded))
                     .foregroundStyle(Theme.tertiaryText)
-                Text("Waiting for the first reading")
+                Text("waiting for a reading")
                     .font(Theme.caption)
                     .foregroundStyle(Theme.secondaryText)
             }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel("Waiting for the first reading")
 
-        case let .faulted(sensorId, at):
+        case let .faulted(_, at):
             // §7.2: a faulted sensor shows *fault*, never its last good number.
-            VStack(spacing: 8) {
-                Image(systemName: "exclamationmark.triangle.fill")
-                    .font(.system(size: heroSize * 0.5))
+            VStack(alignment: .leading, spacing: 4) {
+                Label("Sensor fault", systemImage: "exclamationmark.triangle.fill")
+                    .font(.title.weight(.semibold))
                     .foregroundStyle(Theme.attention)
-                Text("Sensor fault")
-                    .font(.title2.weight(.semibold))
-                    .foregroundStyle(Theme.attention)
-                Text("\(sensorId) · \(Self.age(from: at, now: now))")
+                Text("no reading · \(Self.age(from: at, now: now))")
                     .font(Theme.caption)
                     .foregroundStyle(Theme.secondaryText)
             }
             .accessibilityElement(children: .combine)
-            .accessibilityLabel("Sensor fault on \(sensorId). No reading available.")
+            .accessibilityLabel("Sensor fault. No reading available.")
 
-        case let .reading(celsius, sensorId, at):
-            let stale = monitor.isStale
-            VStack(spacing: 4) {
+        case let .reading(celsius, _, at):
+            let stale = monitor.isStale(sensorId)
+            VStack(alignment: .leading, spacing: 2) {
                 HStack(alignment: .top, spacing: 2) {
-                    Text(TemperatureDisplay.value(celsius: celsius, as: preferences.temperatureUnit))
+                    Text(TemperatureDisplay.value(celsius: celsius, as: unit))
                         .font(.system(size: heroSize, weight: .light, design: .rounded))
-                        // Dim rather than hide when stale: the number is still
-                        // the last thing we know, but it must not read as
-                        // current. tertiaryText clears AA (§7.5).
                         .foregroundStyle(stale ? Theme.tertiaryText : Theme.primaryText)
                         .contentTransition(.numericText())
-                    Text(TemperatureDisplay.symbol(for: preferences.temperatureUnit))
+                    Text(TemperatureDisplay.symbol(for: unit))
                         .font(.title2)
                         .foregroundStyle(Theme.secondaryText)
-                        .padding(.top, heroSize * 0.2)
+                        .padding(.top, heroSize * 0.18)
                 }
                 // §7.2: a stale reading gains an age stamp. A fresh one does not
                 // need one — "now" is the default reading of a live number.
-                Text(stale ? "\(sensorId) · \(Self.age(from: at, now: now))" : sensorId)
-                    .font(Theme.caption)
-                    .foregroundStyle(stale ? Theme.attention : Theme.tertiaryText)
-
-                Sparkline(values: monitor.temperatureHistory)
-                    .frame(height: 44)
-                    .padding(.horizontal, 40)
-                    .padding(.top, 8)
-                    .accessibilityHidden(true)
+                if stale {
+                    Text(Self.age(from: at, now: now))
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.attention)
+                }
+                // A single sample is a dot, not a trend. Reserving the height
+                // for it leaves a band of empty space under the hero that reads
+                // as something failing to load.
+                if monitor.history(sensorId).count > 1 {
+                    Sparkline(values: monitor.history(sensorId))
+                        .frame(height: 40)
+                        .padding(.top, 6)
+                        .accessibilityHidden(true)
+                }
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(
                 stale
-                    ? "Last reading \(TemperatureDisplay.spoken(celsius: celsius, as: preferences.temperatureUnit)), \(Self.age(from: at, now: now)), not current"
-                    : "\(TemperatureDisplay.spoken(celsius: celsius, as: preferences.temperatureUnit))"
+                    ? "\(catalog.name(for: sensorId)), last reading \(TemperatureDisplay.spoken(celsius: celsius, as: unit)), \(Self.age(from: at, now: now)), not current"
+                    : "\(catalog.name(for: sensorId)), \(TemperatureDisplay.spoken(celsius: celsius, as: unit))"
             )
         }
     }
 
-    private static func age(from: Date, now: Date) -> String {
+    static func age(from: Date, now: Date) -> String {
         let seconds = Int(max(0, now.timeIntervalSince(from)))
         if seconds < 60 { return "\(seconds)s ago" }
         if seconds < 3600 { return "\(seconds / 60)m ago" }
         return "\(seconds / 3600)h ago"
+    }
+}
+
+/// Every probe that is not the hero, one row each.
+struct OtherSensors: View {
+    let monitor: TankMonitor
+    let catalog: DeviceCatalog
+    let primary: String
+    let onInspect: (String) -> Void
+
+    @Environment(AppModel.self) private var model
+
+    private var others: [String] { monitor.sensorIds.filter { $0 != primary } }
+
+    var body: some View {
+        if !others.isEmpty {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Other sensors")
+                    .font(Theme.sectionTitle)
+                    .foregroundStyle(Theme.secondaryText)
+                ForEach(others, id: \.self) { id in
+                    Button { onInspect(id) } label: {
+                        SensorRow(
+                            name: catalog.name(for: id),
+                            probe: monitor.probe(id),
+                            stale: monitor.isStale(id),
+                            unit: model.preferences?.temperatureUnit ?? .automatic
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+            }
+        }
+    }
+}
+
+struct SensorRow: View {
+    let name: String
+    let probe: TankMonitor.Probe
+    let stale: Bool
+    let unit: TemperatureUnitPreference
+
+    var body: some View {
+        HStack {
+            Text(name)
+                .foregroundStyle(Theme.primaryText)
+            Spacer()
+            value
+            Image(systemName: "chevron.right")
+                .font(.caption)
+                .foregroundStyle(Theme.tertiaryText)
+        }
+        .padding(.horizontal, 14)
+        // 44pt minimum touch target (§7.4).
+        .frame(minHeight: 44)
+        .background(Theme.surface, in: .rect(cornerRadius: 10))
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private var value: some View {
+        switch probe {
+        case .waiting:
+            Text("—").foregroundStyle(Theme.tertiaryText)
+        case .faulted:
+            Label("Fault", systemImage: "exclamationmark.triangle.fill")
+                .font(Theme.caption)
+                .foregroundStyle(Theme.attention)
+        case let .reading(celsius, _, _):
+            Text(TemperatureDisplay.value(celsius: celsius, as: unit)
+                 + TemperatureDisplay.symbol(for: unit))
+                .font(Theme.value)
+                .foregroundStyle(stale ? Theme.tertiaryText : Theme.primaryText)
+        }
     }
 }
 
@@ -265,7 +425,7 @@ struct Sparkline: View {
 }
 
 /// Per-channel light state, with override context made loud.
-struct SpectrumBar: View {
+struct LightSection: View {
     let monitor: TankMonitor
 
     private var channels: [(id: String, frame: Components.Schemas.StateFrame)] {
@@ -275,7 +435,7 @@ struct SpectrumBar: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("Light")
                 .font(Theme.sectionTitle)
                 .foregroundStyle(Theme.secondaryText)
@@ -292,7 +452,6 @@ struct SpectrumBar: View {
                 ChannelRow(id: channel.id, frame: channel.frame)
             }
         }
-        .padding(.horizontal, 24)
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -337,9 +496,6 @@ struct ChannelRow: View {
             // (§7.3); Reduce Motion swaps it for an instant change.
             .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: duty)
 
-            // "Override state is never silent" — time-and-scheduling §4 and
-            // design brief §3. If a channel is held, the row says so and says
-            // when it ends.
             if let override = frame.override {
                 Label(
                     "Held at \(Int(override.duty * 100))% · \(Self.remaining(override.expiresInS))",
@@ -356,7 +512,6 @@ struct ChannelRow: View {
             }
         }
         .accessibilityElement(children: .combine)
-        // §7.5: labels carry meaning, not widget names.
         .accessibilityLabel(Self.spoken(id: id, duty: duty, frame: frame))
     }
 

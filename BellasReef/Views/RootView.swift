@@ -30,14 +30,14 @@ struct MainTabs: View {
             Tab("Tank", systemImage: "thermometer.medium") {
                 TankView()
             }
-            Tab("Lighting", systemImage: "sun.max") {
+            Tab("Lighting", systemImage: "lightbulb.fill") {
                 ComingSoon(
                     title: "Lighting",
                     detail: "Day curves per channel, drag-to-edit control points, "
                           + "and manual override with its auto-revert timer."
                 )
             }
-            Tab("History", systemImage: "chart.xyaxis.line") {
+            Tab("History", systemImage: "chart.bar.fill") {
                 ComingSoon(
                     title: "History",
                     detail: "Temperature and per-channel duty from the hub's "
@@ -51,6 +51,7 @@ struct MainTabs: View {
         // Glass belongs to the navigation layer only. Content stays solid —
         // a temperature reading never shimmers (design brief §1).
         .tabBarMinimizeBehavior(.onScrollDown)
+
     }
 }
 

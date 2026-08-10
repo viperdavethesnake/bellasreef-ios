@@ -149,11 +149,10 @@ struct HubIdentifyCard: View {
             PendingApproval(pending: pending, hub: hub)
         } else {
             VStack(spacing: 10) {
-                Text(info.pairingOpen
-                     ? "This hub has never been paired. The first device in is trusted."
-                     : "An already-paired device will need to approve this one.")
+                Text(prospect(info))
                     .font(.callout)
-                    .foregroundStyle(Theme.secondaryText)
+                    .foregroundStyle(info.approversAvailable == false && info.pairingOpen == false
+                                     ? Theme.attention : Theme.secondaryText)
                     .multilineTextAlignment(.center)
                 Button {
                     Task { await pair() }
@@ -168,6 +167,24 @@ struct HubIdentifyCard: View {
         if let problem {
             Text(problem).font(Theme.caption).foregroundStyle(Theme.attention)
         }
+    }
+
+    /// What will actually happen if this button is pressed.
+    ///
+    /// Three states, not two. `pairing_open` is keyed on clients *ever* paired,
+    /// so it stays false forever once anything has paired — including after
+    /// every client is revoked. Reading only that flag produced "an
+    /// already-paired device will need to approve this one" on a hub where no
+    /// such device existed, and no amount of waiting would have helped.
+    private func prospect(_ info: Components.Schemas.Info) -> String {
+        if info.pairingOpen == true {
+            return "This hub has never been paired. The first device in is trusted."
+        }
+        if info.approversAvailable == true {
+            return "An already-paired device will need to approve this one."
+        }
+        return "No paired device is left to approve this one. "
+            + "Open a pairing window on the hub first."
     }
 
     private func identify() async {

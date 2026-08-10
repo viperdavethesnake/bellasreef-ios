@@ -96,6 +96,7 @@ public enum TemperatureDisplay {
 @Observable
 public final class Preferences {
     private static let unitKey = "com.bellasreef.temperatureUnit"
+    private static let primaryKey = "com.bellasreef.primarySensor"
 
     /// Held, not defaulted at the call site. Writing back to
     /// `UserDefaults.standard` while reading from an injected store would make
@@ -106,9 +107,20 @@ public final class Preferences {
         didSet { defaults.set(temperatureUnit.rawValue, forKey: Self.unitKey) }
     }
 
+    /// Which probe gets the hero number.
+    ///
+    /// `nil` means "not chosen", and the Tank tab falls back to the first
+    /// reporting sensor rather than showing nothing. Stored so the choice
+    /// survives a relaunch — on a tank with a display and a sump probe, which
+    /// one is *the* temperature is a standing preference, not a per-session one.
+    public var primarySensorId: String? {
+        didSet { defaults.set(primarySensorId, forKey: Self.primaryKey) }
+    }
+
     public init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
         let stored = defaults.string(forKey: Self.unitKey)
         temperatureUnit = stored.flatMap(TemperatureUnitPreference.init(rawValue:)) ?? .automatic
+        primarySensorId = defaults.string(forKey: Self.primaryKey)
     }
 }

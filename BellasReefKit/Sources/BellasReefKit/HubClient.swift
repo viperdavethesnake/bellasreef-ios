@@ -22,11 +22,15 @@ public actor HubClient {
     public enum ClientError: Error, CustomStringConvertible {
         case unexpected(String)
         case unauthorized
+        /// The hub understood the request and refused it, with a reason worth
+        /// showing verbatim.
+        case rejected(String)
 
         public var description: String {
             switch self {
             case let .unexpected(detail): detail
             case .unauthorized: "the hub rejected this credential"
+            case let .rejected(reason): reason
             }
         }
     }
@@ -69,6 +73,69 @@ public actor HubClient {
         case let .undocumented(statusCode, _):
             throw ClientError.unexpected("info returned \(statusCode)")
         }
+    }
+
+    // MARK: Devices
+
+    /// Every registered sensor, with its name and alert band.
+    public func sensors() async throws -> [Components.Schemas.DeviceView] {
+        switch try await client.listSensors() {
+        case let .ok(response): return try response.body.json
+        case .unauthorized: throw ClientError.unauthorized
+        case .unprocessableContent: throw ClientError.unexpected("the hub rejected the query")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("sensors returned \(statusCode)")
+        }
+    }
+
+    /// Name a device, or pass `nil` to go back to the raw id.
+    public func rename(deviceId: String, to name: String?) async throws {
+        switch try await client.renameDevice(
+            path: .init(deviceId: deviceId), body: .json(.init(displayName: name))
+        ) {
+        case .ok: return
+        case .unauthorized: throw ClientError.unauthorized
+        case .notFound: throw ClientError.unexpected("the hub does not know that device")
+        case .unprocessableContent: throw ClientError.rejected("that name was rejected")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("rename returned \(statusCode)")
+        }
+    }
+
+    /// Set or clear the alert band.
+    ///
+    /// A 422 is surfaced as `.rejected` with the hub's own explanation rather
+    /// than a generic failure: the hub is the authority on which bands are
+    /// usable, and paraphrasing "the clear margin is wider than half the band"
+    /// into "invalid input" throws away the only part the operator can act on.
+    public func setThresholds(
+        deviceId: String, minimum: Double?, maximum: Double?, clearMargin: Double?
+    ) async throws {
+        // The generator orders init parameters alphabetically, not in schema
+        // order, so the labels are load-bearing here.
+        let body = Components.Schemas.AlertThresholds(
+            clearMargin: clearMargin, maximum: maximum, minimum: minimum
+        )
+        switch try await client.setThresholds(path: .init(deviceId: deviceId), body: .json(body)) {
+        case .ok: return
+        case .unauthorized: throw ClientError.unauthorized
+        case .notFound: throw ClientError.unexpected("the hub does not know that device")
+        case .conflict: throw ClientError.rejected("thresholds can only be set on a sensor")
+        case let .unprocessableContent(response):
+            throw ClientError.rejected(Self.explain(response))
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("thresholds returned \(statusCode)")
+        }
+    }
+
+    /// Pull the human-readable half out of FastAPI's validation envelope.
+    private static func explain(
+        _ response: Operations.SetThresholds.Output.UnprocessableContent
+    ) -> String {
+        guard let detail = try? response.body.json.detail, let first = detail.first else {
+            return "the hub rejected those thresholds"
+        }
+        return first.msg
     }
 
     // MARK: Alerts
@@ -172,5 +239,44 @@ public actor HubClient {
         accessToken = nil
         accessExpiry = nil
         try tokens.clear()
+    }
+
+    /// How many clients the hub still considers live.
+    ///
+    /// Used to decide whether signing out is the *last* way in. The caller is
+    /// authenticated, so it is one of them: a count of 1 means this device is
+    /// the only one, and revoking it needs hub access to undo.
+    public func liveClientCount() async throws -> Int {
+        switch try await client.listClients() {
+        case let .ok(response):
+            return try response.body.json.filter { $0.revokedAt == nil }.count
+        case .unauthorized: throw ClientError.unauthorized
+        case .unprocessableContent: throw ClientError.unexpected("the hub rejected the query")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("clients returned \(statusCode)")
+        }
+    }
+
+    /// Sign out: revoke on the hub first, then forget locally.
+    ///
+    /// Order matters. Clearing the credential first would leave no way to
+    /// authenticate the revocation, and the hub would keep counting this device
+    /// as a live approver forever — which is the lockout this exists to stop.
+    /// If the hub cannot be reached the local credential is still cleared,
+    /// because a sign-out that silently does nothing is worse; the caller is
+    /// told so it can say the hub still has a stale record.
+    public func signOut() async throws {
+        defer { try? forget() }
+        switch try await client.revokeSelf() {
+        case .ok: return
+        case .unauthorized:
+            // Already revoked, or the credential expired. Either way this device
+            // is not an approver, which is the outcome we wanted.
+            return
+        case .unprocessableContent:
+            return
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("sign-out returned \(statusCode)")
+        }
     }
 }

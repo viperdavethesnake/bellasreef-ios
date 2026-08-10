@@ -76,8 +76,13 @@ public final class TankMonitor {
     }
 
     public private(set) var connection: Connection = .idle
-    public private(set) var probe: Probe = .waiting
-    public private(set) var temperatureHistory: [Double] = []
+    /// Every temperature probe that has reported, keyed by sensor id.
+    ///
+    /// A dictionary rather than a single `probe`, because a reef has more than
+    /// one thermometer the moment there is a sump. The Tank tab picks one to be
+    /// the hero and lists the rest.
+    public private(set) var probes: [String: Probe] = [:]
+    public private(set) var histories: [String: [Double]] = [:]
     /// Latest state per actuator, keyed by id.
     public private(set) var channels: [String: Components.Schemas.StateFrame] = [:]
     public private(set) var alerts: [Alert] = []
@@ -103,9 +108,24 @@ public final class TankMonitor {
     /// merely slow.
     public static let stalenessThreshold: TimeInterval = 60
 
-    public var isStale: Bool {
-        guard let last = probe.observedAt else { return false }
+    /// Sensor ids in a stable order, so rows do not reshuffle between frames.
+    public var sensorIds: [String] { probes.keys.sorted() }
+
+    public func probe(_ sensorId: String) -> Probe { probes[sensorId] ?? .waiting }
+    public func history(_ sensorId: String) -> [Double] { histories[sensorId] ?? [] }
+
+    public func isStale(_ sensorId: String) -> Bool {
+        guard let last = probes[sensorId]?.observedAt else { return false }
         return Date().timeIntervalSince(last) > Self.stalenessThreshold
+    }
+
+    /// True when *every* reporting probe has gone quiet.
+    ///
+    /// One stale probe among several is that probe's problem and is shown on
+    /// its row; the status line only claims the tank is unmonitored when
+    /// nothing at all is current.
+    public var everythingIsStale: Bool {
+        !probes.isEmpty && sensorIds.allSatisfy { isStale($0) }
     }
 
     /// Safety tone for the status line.
@@ -118,8 +138,11 @@ public final class TankMonitor {
     public var tone: HealthTone {
         if channels.values.contains(where: { $0.payload.latched == true }) { return .safety }
         if !alerts.isEmpty { return .attention }
+        if probes.values.contains(where: { if case .faulted = $0 { return true } else { return false } }) {
+            return .attention
+        }
         switch connection {
-        case .live where !isStale: return .allClear
+        case .live where !everythingIsStale: return .allClear
         default: return .attention
         }
     }
@@ -132,9 +155,13 @@ public final class TankMonitor {
         case .idle: return "Not connected"
         case .connecting: return "Connecting…"
         case .live:
-            if case .faulted = probe { return "Sensor fault" }
+            let faulted = probes.values.filter { if case .faulted = $0 { return true } else { return false } }
+            if !faulted.isEmpty {
+                return faulted.count == 1 ? "Sensor fault" : "\(faulted.count) sensor faults"
+            }
             if !alerts.isEmpty { return alerts.count == 1 ? "1 alert" : "\(alerts.count) alerts" }
-            return isStale ? "No data for a minute" : "All clear"
+            if probes.isEmpty { return "Waiting for a sensor" }
+            return everythingIsStale ? "No data for a minute" : "All clear"
         case let .disconnected(why): return "Disconnected — \(why)"
         case let .contractMismatch(detail): return "App and hub disagree — \(detail)"
         }
@@ -143,6 +170,17 @@ public final class TankMonitor {
     public func start() {
         guard task == nil else { return }
         task = Task { [weak self] in await self?.run() }
+    }
+
+    /// Tear the socket down so the run loop reconnects immediately.
+    ///
+    /// This is what pull-to-refresh means on a live stream. There is nothing to
+    /// re-fetch — the data pushes — so the honest gesture is "prove the
+    /// connection is real", and the way to do that is to drop it and watch it
+    /// come back.
+    public func reconnect() async {
+        connection = .connecting
+        await stream.disconnect()
     }
 
     public func stop() {
@@ -230,6 +268,7 @@ public final class TankMonitor {
         guard reading.sensorType == "temp" else { return }
         let observedAt = reading.emittedAt
 
+        let id = reading.sensorId
         switch reading.quality {
         // `nil` means the field was omitted, and the schema declares its default
         // as "ok". Treating absence as a fault would be stricter but wrong: it
@@ -240,13 +279,15 @@ public final class TankMonitor {
             // value keeps conversion at the render edge, so history never
             // contains a mix of units.
             guard reading.unit == "degC" else { return }
-            probe = .reading(celsius: value, sensorId: reading.sensorId, at: observedAt)
-            temperatureHistory.append(value)
-            if temperatureHistory.count > historyLimit {
-                temperatureHistory.removeFirst(temperatureHistory.count - historyLimit)
+            probes[id] = .reading(celsius: value, sensorId: id, at: observedAt)
+            var samples = histories[id] ?? []
+            samples.append(value)
+            if samples.count > historyLimit {
+                samples.removeFirst(samples.count - historyLimit)
             }
+            histories[id] = samples
         case .fault:
-            probe = .faulted(sensorId: reading.sensorId, at: observedAt)
+            probes[id] = .faulted(sensorId: id, at: observedAt)
         case .stale:
             // Neither a good reading nor a failure. Left as-is so the age stamp
             // ages naturally rather than being reset by a re-presented value.
