@@ -29,7 +29,14 @@ public enum Theme {
 
     public static let primaryText = Color(red: 0.918, green: 0.937, blue: 0.961)
     public static let secondaryText = Color(red: 0.612, green: 0.655, blue: 0.706)
-    public static let tertiaryText = Color(red: 0.392, green: 0.435, blue: 0.490)
+    /// Lifted from (0.392, 0.435, 0.490) to clear WCAG AA for normal text.
+    ///
+    /// The original measured **3.78:1** against `base` — fine for large text,
+    /// a fail for the captions and sensor ids it was actually used on. Design
+    /// brief §7.5 requires AA for all text and calls out the dimmed stale
+    /// treatment by name: it must read as quieter, not as decoration. This is
+    /// 4.60:1, the smallest bump along the same hue that passes.
+    public static let tertiaryText = Color(red: 0.441, green: 0.489, blue: 0.551)
 
     // MARK: Semantic
 
@@ -48,7 +55,11 @@ public enum Theme {
 
     /// The hero number on the Tank tab. Rounded because a temperature is a
     /// reading, not a data point in a spreadsheet.
-    public static let heroNumber = Font.system(size: 72, weight: .light, design: .rounded)
+    /// Base size for the hero reading. Not a `Font`: a fixed-size system font
+    /// ignores Dynamic Type entirely, and design brief §7.5 requires hero
+    /// numbers to scale. Views pass this through `@ScaledMetric` and build the
+    /// font from the scaled value — see `TemperatureHero`.
+    public static let heroNumberSize: CGFloat = 72
     public static let sectionTitle = Font.system(.headline, design: .rounded)
     public static let value = Font.system(.body, design: .rounded).monospacedDigit()
     public static let caption = Font.system(.caption, design: .rounded)

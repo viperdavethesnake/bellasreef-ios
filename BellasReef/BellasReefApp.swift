@@ -6,11 +6,13 @@ import SwiftUI
 @main
 struct BellasReefApp: App {
     @State private var model = AppModel()
+    @State private var preferences = Preferences()
 
     var body: some Scene {
         WindowGroup {
             RootView()
                 .environment(model)
+                .environment(preferences)
                 // Dark is primary (design brief §2). Declared here as well as in
                 // Info.plist so previews and the simulator agree with the device.
                 .preferredColorScheme(.dark)

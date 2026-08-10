@@ -6,10 +6,11 @@ reviewable diff rather than something that shifts under the app.
 
 | | |
 |---|---|
-| Backend commit | `3b01443` |
-| CI run | [31357262810](https://github.com/viperdavethesnake/bellas-reef/actions/runs/31357262810) |
+| Backend commit | `9c3dbba` |
+| CI run | exported locally from `9c3dbba`; re-pin from the artifact once that run is green |
 | Pinned on | 2026-08-10 |
-| OpenAPI | 3.1.0, 13 paths |
+| OpenAPI | 3.1.0, 15 paths |
+| Contracts version | 2.1.0 |
 | Frame schema | v1 |
 
 ## Refreshing

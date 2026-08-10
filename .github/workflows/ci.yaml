@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    # iOS 26 needs the Xcode 26 SDK. Pinned rather than `macos-latest` so a
+    # runner-image rollover cannot silently drop the project to an older SDK
+    # and start failing on `platforms: [.iOS(.v26)]`.
+    runs-on: macos-26
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - name: Versions
+        run: |
+          xcodebuild -version
+          swift --version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      # The .xcodeproj is generated and gitignored — project.yml is the source
+      # of truth, so CI builds the same way a developer does.
+      - name: Generate project
+        run: xcodegen generate
+
+      - name: Build
+        run: |
+          xcodebuild build \
+            -project BellasReef.xcodeproj \
+            -scheme BellasReef \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+            -skipPackagePluginValidation \
+            | xcbeautify --renderer github-actions || exit ${PIPESTATUS[0]}
+
+      # BellasReefKitTests only. BellasReefUITests is deliberately excluded: it
+      # needs a hub advertising _bellasreef._tcp on the LAN, it spends a pairing
+      # window, and it leaves a paired client behind. That is a bench test, not
+      # something to run on every push.
+      - name: Unit tests
+        run: |
+          xcodebuild test \
+            -scheme BellasReefKit-Package \
+            -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+            -skipPackagePluginValidation \
+            | xcbeautify --renderer github-actions || exit ${PIPESTATUS[0]}
+        working-directory: BellasReefKit
+
+      # The generated client is only as current as the spec it was generated
+      # from. This does not fetch the backend's artifact — it checks the two
+      # copies in this repo agree, so a hand-edit to one is caught.
+      - name: Contracts are in sync
+        run: |
+          diff -q Contracts/openapi.json BellasReefKit/Sources/BellasReefAPI/openapi.json \
+            || { echo "::error::Contracts/openapi.json and the generator input have diverged"; exit 1; }

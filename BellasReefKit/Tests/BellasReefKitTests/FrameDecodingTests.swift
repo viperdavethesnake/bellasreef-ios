@@ -43,6 +43,15 @@ enum Fixtures {
     "sensor_id":"ds18b20-28-000000bfe244","sensor_type":"temp","value":null,\
     "unit":"degC","quality":"fault","calibration_id":null}}
     """
+    /// A breach, captured from the shape the hub publishes.
+    static let alert = """
+    {"frame_version":1,"received_at":"2026-08-10T07:02:11.104233Z","kind":"alert",\
+    "subject":"bellasreef.alert.ds18b20-28-000000bfe244","payload":{\
+    "schema_version":2,"message_id":"3f1c1a54-2c1e-4c8a-9f61-5d3b1a9e77aa",\
+    "emitted_at":"2026-08-10T07:02:11.103998Z","source":"control-engine",\
+    "device_id":"ds18b20-28-000000bfe244","sensor_type":"temp","state":"breach",\
+    "bound":"min","value":23.1,"threshold":24.0,"clear_margin":0.5,"unit":"degC"}}
+    """
 }
 
 @Suite("Frame decoding")
@@ -96,13 +105,53 @@ struct FrameDecodingTests {
         #expect(frame.payload.quality == .fault)
     }
 
-    @Test("an unknown kind is surfaced, not swallowed")
-    func unknownKind() {
+    @Test("a real alert frame decodes")
+    func alertFrame() throws {
+        guard case let .alert(frame) = try client.decode(Fixtures.alert) else {
+            Issue.record("expected an alert frame")
+            return
+        }
+        #expect(frame.payload.deviceId == "ds18b20-28-000000bfe244")
+        #expect(frame.payload.state == .breach)
+        #expect(frame.payload.bound == .min)
+        #expect(frame.payload.value == 23.1)
+        #expect(frame.payload.threshold == 24.0)
+        #expect(frame.payload.clearMargin == 0.5)
+    }
+
+    @Test("an unknown kind is skipped, not fatal")
+    func unknownKind() throws {
+        // Deliberately different from the spine, where an unknown message is
+        // rejected loudly. This is a display stream: refusing to render the
+        // temperature because the hub also sent a frame type this build
+        // predates is worse than ignoring that frame. Real drift — a renamed
+        // field on a kind we *do* know — still throws, which is the property
+        // PRD G3 exists to protect, and `undecodableSensorFrame` covers it.
         let future = """
         {"frame_version":1,"received_at":"2026-08-10T06:25:20.454993Z","kind":"alarm"}
         """
+        guard case let .unknown(kind) = try client.decode(future) else {
+            Issue.record("expected the frame to be skipped")
+            return
+        }
+        #expect(kind == "alarm")
+    }
+
+    @Test("a renamed field on a known kind is still a hard error")
+    func undecodableSensorFrame() {
+        // `payload` present but missing its required `sensor_id`. This is what
+        // contract drift actually looks like, and it must not be silently
+        // skipped the way an unknown kind is.
+        let drifted = """
+        {"frame_version":1,"received_at":"2026-08-10T06:25:22.368219Z","kind":"sensor",\
+        "subject":"bellasreef.sensor.temp.x","payload":{"schema_version":2,\
+        "message_id":"e9889b54-c16e-4630-9267-b866ecdccf37",\
+        "emitted_at":"2026-08-10T06:25:22.367842Z","source":"hardware-io",\
+        "probe_id":"renamed","sensor_type":"temp","value":23.8,"unit":"degC",\
+        "quality":"ok","calibration_id":null}}
+        """
         #expect(throws: StreamClient.StreamError.self) {
-            _ = try client.decode(future)
+            _ = try client.decode(drifted)
         }
     }
 }

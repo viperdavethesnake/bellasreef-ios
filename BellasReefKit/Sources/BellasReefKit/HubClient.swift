@@ -35,16 +35,28 @@ public actor HubClient {
     private let client: Client
     private let tokens: TokenStore
 
+    private let tokenProvider: TokenProvider
+
     private var accessToken: String?
     private var accessExpiry: Date?
 
     public init(hub: Hub, tokens: TokenStore = TokenStore()) {
         self.hub = hub
         self.tokens = tokens
+
+        // The middleware needs a token, getting a token needs this actor, and
+        // this actor is not initialised yet. The box breaks the cycle: it is
+        // handed to the middleware now and given its resolver below, once
+        // `self` is fully formed.
+        let provider = TokenProvider()
+        self.tokenProvider = provider
         self.client = Client(
             serverURL: hub.baseURL,
-            transport: URLSessionTransport()
+            configuration: Configuration(dateTranscoder: FractionalSecondsDateTranscoder()),
+            transport: URLSessionTransport(),
+            middlewares: [BearerAuthMiddleware(token: { try await provider.token() })]
         )
+        provider.resolve = { [self] in try await accessTokenNow() }
     }
 
     // MARK: Discovery
@@ -56,6 +68,35 @@ public actor HubClient {
             return try response.body.json
         case let .undocumented(statusCode, _):
             throw ClientError.unexpected("info returned \(statusCode)")
+        }
+    }
+
+    // MARK: Alerts
+
+    /// Currently-open threshold breaches.
+    ///
+    /// The reconnect path. Alerts travel on core pub/sub with no replay, so a
+    /// client that was backgrounded through a breach would otherwise show an
+    /// all-clear tank that is actually out of range.
+    public func activeAlerts() async throws -> [TankMonitor.Alert] {
+        switch try await client.listAlerts() {
+        case let .ok(response):
+            return try response.body.json.active.map { row in
+                TankMonitor.Alert(
+                    deviceId: row.deviceId,
+                    bound: row.bound == .max ? "max" : "min",
+                    value: row.raisedValue,
+                    threshold: row.threshold,
+                    unit: row.unit,
+                    raisedAt: row.raisedAt
+                )
+            }
+        case .unauthorized:
+            throw ClientError.unauthorized
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the alerts query")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("alerts returned \(statusCode)")
         }
     }
 

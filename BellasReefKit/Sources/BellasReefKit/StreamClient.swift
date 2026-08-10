@@ -13,6 +13,10 @@ public enum StreamFrame: Sendable {
     case ready(Components.Schemas.ReadyFrame)
     case state(Components.Schemas.StateFrame)
     case sensor(Components.Schemas.SensorFrame)
+    case alert(Components.Schemas.AlertFrame)
+    /// A frame kind this build does not know. Carried rather than thrown — see
+    /// `decode(_:)`.
+    case unknown(kind: String)
 }
 
 /// Hand-written WebSocket transport. Carries **no contract knowledge**.
@@ -133,11 +137,22 @@ public actor StreamClient {
                 return .state(try decoder.decode(Components.Schemas.StateFrame.self, from: data))
             case "sensor":
                 return .sensor(try decoder.decode(Components.Schemas.SensorFrame.self, from: data))
+            case "alert":
+                return .alert(try decoder.decode(Components.Schemas.AlertFrame.self, from: data))
             default:
-                // Forward compatibility: a hub newer than this app may send a
-                // kind we do not know. Surfacing it as an error beats silently
-                // ignoring a frame that might have mattered.
-                throw StreamError.undecodableFrame("unknown frame kind '\(kind)'")
+                // Forward compatibility, and a deliberate split from how the
+                // spine behaves.
+                //
+                // On the NATS spine an unknown message is rejected loudly:
+                // sender and receiver may be different hardware generations and
+                // a misread dose is dangerous. This is not the spine. It is a
+                // display stream, and refusing to render the tank temperature
+                // because the hub also sent a frame type this build predates is
+                // strictly worse than ignoring that frame.
+                //
+                // Genuine drift — a renamed field on a kind we *do* know — still
+                // throws below, which is the property PRD G3 protects.
+                return .unknown(kind: kind)
             }
         } catch let error as StreamError {
             throw error
