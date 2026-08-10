@@ -7,6 +7,12 @@
 name: BellasReef
 
 options:
+  # Xcode 26 treats a .icon package as one file. Without this XcodeGen walks
+  # into it and adds icon.json and each SVG as separate resources, which builds
+  # but produces no app icon.
+  fileTypes:
+    "icon":
+      file: true
   bundleIdPrefix: com.bellasreef
   deploymentTarget:
     iOS: "26.0"
@@ -58,6 +64,7 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bellasreef.app
         TARGETED_DEVICE_FAMILY: "1,2"
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
   # Drives the real pairing flow against a real hub on the LAN. Not a CI target:
   # it consumes a pairing window and creates a paired client on the hub, so it is

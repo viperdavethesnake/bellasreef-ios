@@ -1,0 +1,19 @@
+{
+  "fill": {
+    "solid": "#0A1220"
+  },
+  "groups": [
+    {
+      "layers": [
+        {
+          "image-name": "coral-front.png",
+          "name": "Coral"
+        },
+        {
+          "image-name": "coral-rear.png",
+          "name": "Ghost coral"
+        }
+      ]
+    }
+  ]
+}
