@@ -6,11 +6,11 @@ reviewable diff rather than something that shifts under the app.
 
 | | |
 |---|---|
-| Backend commit | `0046d9f` |
+| Backend commit | `13bcc1d` |
 | CI run | exported locally from `9c3dbba`; re-pin from the artifact once that run is green |
 | Pinned on | 2026-08-10 |
-| OpenAPI | 3.1.0, 17 paths |
-| Contracts version | 2.1.0 |
+| OpenAPI | 3.1.0, 19 paths |
+| Contracts version | 3.0.0 |
 | Frame schema | v1 |
 
 ## Refreshing

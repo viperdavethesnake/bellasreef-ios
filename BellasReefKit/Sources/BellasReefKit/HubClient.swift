@@ -143,6 +143,29 @@ public actor HubClient {
         return message.hasPrefix(prefix) ? String(message.dropFirst(prefix.count)) : message
     }
 
+    // MARK: History
+
+    /// Downsampled history for the window, with alert episodes.
+    ///
+    /// `buckets` is a *request*, not a promise — the hub caps it. Downsampling
+    /// happens there precisely so a day of five-second samples never crosses
+    /// the network.
+    public func history(
+        from start: Date, to end: Date, buckets: Int = 240
+    ) async throws -> Components.Schemas.HistoryView {
+        switch try await client.history(
+            query: .init(start: start, end: end, buckets: buckets)
+        ) {
+        case let .ok(response): return try response.body.json
+        case .unauthorized: throw ClientError.unauthorized
+        case .unprocessableContent: throw ClientError.rejected("the hub refused that window")
+        case .serviceUnavailable:
+            throw ClientError.rejected("the hub has no telemetry store configured")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("history returned \(statusCode)")
+        }
+    }
+
     // MARK: Alerts
 
     /// Currently-open threshold breaches.

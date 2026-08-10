@@ -38,11 +38,7 @@ struct MainTabs: View {
                 )
             }
             Tab("History", systemImage: "chart.bar.fill") {
-                ComingSoon(
-                    title: "History",
-                    detail: "Temperature and per-channel duty from the hub's "
-                          + "time-series store."
-                )
+                HistoryTabView()
             }
             Tab("System", systemImage: "gearshape") {
                 SystemView()

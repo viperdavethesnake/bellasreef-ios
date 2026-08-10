@@ -218,7 +218,10 @@ struct AlertBanner: View {
                     .foregroundStyle(Theme.primaryText)
                 // The age. A breach that started four hours ago is a different
                 // situation from one that started thirty seconds ago.
-                Text(alert.raisedAt, format: .relative(presentation: .numeric))
+                // Not `.relative(presentation: .numeric)`: at zero age that
+                // renders "in 0 seconds" — future tense for something that has
+                // already happened, exactly when it is most likely to be read.
+                Text(RelativeAge.describe(from: alert.raisedAt))
                     .font(Theme.caption)
                     .foregroundStyle(Theme.secondaryText)
             }
@@ -378,10 +381,7 @@ struct PrimaryReading: View {
     }
 
     static func age(from: Date, now: Date) -> String {
-        let seconds = Int(max(0, now.timeIntervalSince(from)))
-        if seconds < 60 { return "\(seconds)s ago" }
-        if seconds < 3600 { return "\(seconds / 60)m ago" }
-        return "\(seconds / 3600)h ago"
+        RelativeAge.describe(from: from, now: now)
     }
 }
 
