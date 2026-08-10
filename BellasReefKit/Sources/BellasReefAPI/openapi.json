@@ -142,32 +142,24 @@
             "type": "string"
           },
           "last_seen_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Last Seen At"
+            "format": "date-time",
+            "title": "Last Seen At",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "name": {
             "title": "Name",
             "type": "string"
           },
           "revoked_at": {
-            "anyOf": [
-              {
-                "format": "date-time",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Revoked At"
+            "format": "date-time",
+            "title": "Revoked At",
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
@@ -278,16 +270,12 @@
             "type": "number"
           },
           "reason": {
-            "anyOf": [
-              {
-                "maxLength": 256,
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Reason"
+            "maxLength": 256,
+            "title": "Reason",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "target": {
             "maxLength": 64,
@@ -500,17 +488,13 @@
         "description": "One sample from one sensor.\n\nPublished on ``bellasreef.sensor.<type>.<id>`` as core pub/sub. History\nlives in VictoriaMetrics, so these are deliberately not persisted on the\nspine.",
         "properties": {
           "calibration_id": {
-            "anyOf": [
-              {
-                "format": "uuid",
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
             "default": null,
-            "title": "Calibration Id"
+            "format": "uuid",
+            "title": "Calibration Id",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "emitted_at": {
             "format": "date-time",
@@ -560,15 +544,11 @@
             "type": "string"
           },
           "value": {
-            "anyOf": [
-              {
-                "type": "number"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Value"
+            "title": "Value",
+            "type": [
+              "number",
+              "null"
+            ]
           }
         },
         "required": [
@@ -600,14 +580,7 @@
             "type": "string"
           },
           "override": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/OverrideContext"
-              },
-              {
-                "type": "null"
-              }
-            ],
+            "$ref": "#/components/schemas/OverrideContext",
             "default": null
           },
           "payload": {
@@ -703,15 +676,11 @@
             "name": "authorization",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
+              "title": "Authorization",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -729,6 +698,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or revoked credential."
           },
           "422": {
             "content": {
@@ -767,15 +739,11 @@
             "name": "authorization",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
+              "title": "Authorization",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -793,6 +761,12 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or revoked credential."
+          },
+          "404": {
+            "description": "Unknown or already revoked."
           },
           "422": {
             "content": {
@@ -821,15 +795,11 @@
             "name": "authorization",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
+              "title": "Authorization",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -848,6 +818,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or revoked credential."
           },
           "422": {
             "content": {
@@ -897,15 +870,11 @@
             "name": "authorization",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
+              "title": "Authorization",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -923,6 +892,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or revoked credential."
           },
           "422": {
             "content": {
@@ -949,15 +921,11 @@
             "name": "authorization",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
+              "title": "Authorization",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -981,6 +949,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or revoked credential."
           },
           "422": {
             "content": {
@@ -1021,15 +992,11 @@
             "name": "authorization",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
+              "title": "Authorization",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -1047,6 +1014,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or revoked credential."
           },
           "404": {
             "description": "Unknown or already released."
@@ -1198,15 +1168,11 @@
             "name": "authorization",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
+              "title": "Authorization",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -1224,6 +1190,12 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or revoked credential."
+          },
+          "409": {
+            "description": "The pairing request is not pending."
           },
           "422": {
             "content": {
@@ -1261,15 +1233,11 @@
             "name": "authorization",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
+              "title": "Authorization",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -1287,6 +1255,12 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or revoked credential."
+          },
+          "409": {
+            "description": "The pairing request is not pending."
           },
           "422": {
             "content": {
@@ -1314,15 +1288,11 @@
             "name": "authorization",
             "required": false,
             "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Authorization"
+              "title": "Authorization",
+              "type": [
+                "string",
+                "null"
+              ]
             }
           }
         ],
@@ -1341,6 +1311,9 @@
               }
             },
             "description": "Successful Response"
+          },
+          "401": {
+            "description": "Missing, invalid, expired, or revoked credential."
           },
           "422": {
             "content": {

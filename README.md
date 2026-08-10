@@ -15,6 +15,34 @@ The `.xcodeproj` is generated and gitignored — `project.yml` is the source of
 truth, so project structure is a reviewable diff instead of a pbxproj merge
 conflict.
 
+## Tests
+
+Two kinds, and the difference matters.
+
+`BellasReefKitTests` are offline and safe to run anywhere. `FrameDecodingTests`
+decodes frames captured byte-for-byte off a real hub — including a faulted
+reading whose `value` is null, which is the field `swift-openapi-generator`
+silently dropped before the backend emitted OpenAPI 3.1 nullability.
+
+`BellasReefUITests` is a **bench** test. It needs a hub advertising
+`_bellasreef._tcp` on the LAN, spends a pairing window, and leaves a paired
+client behind, so it never belongs in CI:
+
+```sh
+ssh <pi> 'cd ~/bellasreef && ./scripts/dev/…'   # ensure api + hardware-io are up
+ssh <pi> '… uv run bellasreef pair --ttl 900'   # open a pairing window
+
+DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
+xcodebuild test -project BellasReef.xcodeproj -scheme BellasReef \
+  -destination 'platform=iOS Simulator,name=iPhone 17 Pro' \
+  -skipPackagePluginValidation
+```
+
+It walks discovery → identify → pair → a live temperature on screen. It exists
+because every cheaper check passed while the app still showed an endless
+spinner: the backend published, the socket served, the generated types decoded,
+and discovery dropped every result on the floor.
+
 ## Contracts, and why nothing here is hand-typed
 
 `Contracts/` holds `openapi.json` and `stream-frames.schema.json`, downloaded

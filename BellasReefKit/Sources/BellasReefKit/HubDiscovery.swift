@@ -2,6 +2,9 @@
 
 import Foundation
 import Network
+import OSLog
+
+private let log = Logger(subsystem: "com.bellasreef.app", category: "discovery")
 
 /// A hub the app can talk to.
 public struct Hub: Sendable, Hashable, Identifiable {
@@ -74,7 +77,7 @@ public final class HubDiscovery {
 
         browser.browseResultsChangedHandler = { [weak self] results, _ in
             Task { @MainActor in
-                self?.hubs = results.compactMap(Self.hub(from:))
+                await self?.refresh(results)
             }
         }
 
@@ -88,31 +91,109 @@ public final class HubDiscovery {
         isBrowsing = false
     }
 
-    private static func hub(from result: NWBrowser.Result) -> Hub? {
-        guard case let .service(name, _, _, _) = result.endpoint else { return nil }
-
-        // Bonjour gives the instance name and the TXT record; resolving to an
-        // address happens when URLSession connects. `<name>.local` is the
-        // hostname avahi publishes alongside the service.
-        var port = 8000
-        var apiPath = "/api/v1"
-        if case let .bonjour(txt) = result.metadata {
-            if let raw = txt.getEntry(for: "api"), case let .string(value) = raw {
-                apiPath = value
-            }
-            if let raw = txt.getEntry(for: "port"), case let .string(value) = raw,
-               let parsed = Int(value) {
-                port = parsed
-            }
+    private func refresh(_ results: Set<NWBrowser.Result>) async {
+        var found: [Hub] = []
+        for result in results {
+            guard case let .service(name, _, _, _) = result.endpoint else { continue }
+            guard let url = await Self.resolve(result.endpoint) else { continue }
+            found.append(Hub(name: name, baseURL: url, discovered: true))
         }
-        _ = apiPath
+        hubs = found.sorted { $0.name < $1.name }
+    }
+
+    /// Turn a Bonjour service endpoint into an address we can actually call.
+    ///
+    /// A browse result carries the *instance name* — a human label like
+    /// "Bella's Reef on bellasreef". It is not a hostname, and building
+    /// `<name>.local` from it produces something unroutable the moment the
+    /// operator names their hub with a space. The address and the port both live
+    /// in the SRV record, so the only honest way to get them is to resolve.
+    ///
+    /// `NWConnection` is the resolver: it does the SRV and A/AAAA lookups, and
+    /// once ready its path holds the endpoint it actually reached. That also
+    /// means a hub which resolves but refuses connections never appears in the
+    /// list, which is the correct outcome — a row you cannot tap through is
+    /// worse than no row.
+    nonisolated private static func resolve(_ endpoint: NWEndpoint) async -> URL? {
+        await withCheckedContinuation { continuation in
+            let connection = NWConnection(to: endpoint, using: .tcp)
+            let once = ResumeOnce(continuation)
+            let queue = DispatchQueue(label: "com.bellasreef.resolve")
+
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready:
+                    let resolved = connection.currentPath?.remoteEndpoint
+                    let url = Self.url(for: resolved)
+                    log.debug("resolved \(String(describing: resolved)) -> \(String(describing: url))")
+                    connection.cancel()
+                    once.finish(url)
+                case .failed, .cancelled:
+                    once.finish(nil)
+                default:
+                    break
+                }
+            }
+            // A hub that answers mDNS but never completes a handshake would
+            // otherwise leave the row — and this task — hanging forever.
+            queue.asyncAfter(deadline: .now() + 5) {
+                connection.cancel()
+                once.finish(nil)
+            }
+            connection.start(queue: queue)
+        }
+    }
+
+    nonisolated private static func url(for endpoint: NWEndpoint?) -> URL? {
+        guard case let .hostPort(host, port) = endpoint else { return nil }
 
         var components = URLComponents()
         components.scheme = "http"
-        components.host = "\(name).local"
-        components.port = port
-        guard let url = components.url else { return nil }
+        components.port = Int(port.rawValue)
 
-        return Hub(name: name, baseURL: url, discovered: true)
+        switch host {
+        case let .ipv4(address):
+            // Network hands the address back with the interface it was reached
+            // on — `192.168.254.236%en0`. A URL host cannot carry that zone: the
+            // `%` reads as a broken percent-escape and `URLComponents.url`
+            // returns nil rather than complaining. A routable v4 literal does not
+            // need the scope. This was the entire cause of the endless spinner.
+            components.host = String("\(address)".prefix { $0 != "%" })
+        case let .ipv6(address):
+            // A link-local address carries a zone (`fe80::1%en0`). In a URL the
+            // literal must be bracketed and the zone separator percent-encoded,
+            // so this has to bypass the host setter's own escaping.
+            let zoned = "\(address)".replacingOccurrences(of: "%", with: "%25")
+            components.percentEncodedHost = "[\(zoned)]"
+        case let .name(name, _):
+            components.host = name
+        @unknown default:
+            return nil
+        }
+
+        return components.url
+    }
+}
+
+/// Resumes a continuation exactly once, from whichever callback wins.
+///
+/// Both the connection's state handler and the timeout can fire, and resuming a
+/// `CheckedContinuation` twice is a crash rather than a warning. `@unchecked` is
+/// carried deliberately: the lock is the invariant the compiler cannot see.
+private final class ResumeOnce: @unchecked Sendable {
+    private let lock = NSLock()
+    private var done = false
+    private let continuation: CheckedContinuation<URL?, Never>
+
+    init(_ continuation: CheckedContinuation<URL?, Never>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ url: URL?) {
+        lock.lock()
+        let isFirst = !done
+        done = true
+        lock.unlock()
+        if isFirst { continuation.resume(returning: url) }
     }
 }

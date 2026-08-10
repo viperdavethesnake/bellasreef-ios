@@ -58,3 +58,29 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.bellasreef.app
         TARGETED_DEVICE_FAMILY: "1,2"
+
+  # Drives the real pairing flow against a real hub on the LAN. Not a CI target:
+  # it consumes a pairing window and creates a paired client on the hub, so it is
+  # run deliberately from a bench machine, never on every push.
+  BellasReefUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: BellasReefUITests
+    dependencies:
+      - target: BellasReef
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bellasreef.uitests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_TARGET_NAME: BellasReef
+
+schemes:
+  BellasReef:
+    build:
+      targets:
+        BellasReef: all
+        BellasReefUITests: [test]
+    test:
+      targets:
+        - BellasReefUITests

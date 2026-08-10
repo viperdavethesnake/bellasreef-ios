@@ -35,7 +35,7 @@ let package = Package(
         ),
         .testTarget(
             name: "BellasReefKitTests",
-            dependencies: ["BellasReefKit"]
+            dependencies: ["BellasReefKit", "BellasReefAPI"]
         ),
     ]
 )
