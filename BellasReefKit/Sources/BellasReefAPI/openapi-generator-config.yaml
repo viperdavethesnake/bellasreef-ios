@@ -1,0 +1,7 @@
+# Types AND client: the app needs both the models (including the stream frame
+# schemas folded into components by the backend's export) and a REST client.
+generate:
+  - types
+  - client
+accessModifier: public
+namingStrategy: idiomatic

@@ -1,0 +1,10 @@
+Copyright (c) 2026 Bella's Reef LLC. All rights reserved.
+
+This software is proprietary and closed source. No licence is granted to use,
+copy, modify, or distribute it.
+
+This is deliberate and documented: PRD Q3 makes the iOS app the commercial
+component. Everything it talks to is open — the OpenAPI spec and the contracts
+package are Apache-2.0 in the public backend repository, so any third party can
+build a client without permission and without inheriting copyleft. Only this
+app is closed.
