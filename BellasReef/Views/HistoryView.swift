@@ -283,12 +283,33 @@ struct TraceChart: View {
             .chartXScale(domain: history.window ?? Date.distantPast...Date())
             .chartYAxis { AxisMarks(position: .leading) }
             .chartXAxis {
-                AxisMarks(values: history.range.axisStride) { value in
+                AxisMarks(values: history.range.axisStride) { _ in
                     AxisGridLine()
                     AxisTick()
-                    AxisValueLabel(format: history.range.axisFormat)
+                    // `.greedy`, because the default drops a label rather than
+                    // let it overlap — and the label it drops is the last one,
+                    // whose tick sits on the plot edge. On a week view that is
+                    // the label naming today, which is the one an operator is
+                    // most likely to be looking for. Trailing padding gives it
+                    // somewhere to go; this stops Charts discarding it first.
+                    AxisValueLabel(
+                        format: history.range.axisFormat,
+                        collisionResolution: .greedy
+                    )
                 }
             }
+            // Room for the trailing axis label, taken from the PLOT rather than
+            // added outside the chart. Charts centres the last label on its
+            // tick, which sits on the plot's right edge, so half of it lands
+            // outside the chart's bounds and is clipped there — "…" at 24H,
+            // "T…" at 7D. Outer padding cannot reach it, because the clipping
+            // happens inside. Insetting the plot moves the tick inward so the
+            // whole label falls within the chart.
+            //
+            // The plot loses ~26pt of width. Worth it on an axis whose entire
+            // job at 7D is naming which day you are looking at, and the day it
+            // was dropping was today's.
+            .chartPlotStyle { $0.padding(.trailing, 26) }
             .frame(height: 180)
             .accessibilityLabel(Self.spoken(trace: trace, history: history))
 
@@ -312,9 +333,28 @@ struct Footnote: View {
     let trace: HistoryTrace
     let history: HistoryModel
 
+    /// Gap wording that survives a change of zoom.
+    ///
+    /// The same hour honestly reported "1 gap" at 1H and nothing at 6H, which
+    /// read as the chart contradicting itself. It was not: a gap is a missing
+    /// bucket, so an outage shorter than a bucket is not merely unreported, it
+    /// is invisible — both samples land in the same bucket. Coarsen the range
+    /// and small holes stop existing as far as the data can tell.
+    ///
+    /// So the footnote states the resolution it is speaking at, in both
+    /// directions. "No gaps" without that qualifier is a claim the chart cannot
+    /// support at 7D, and silence about it is what made the two answers look
+    /// like a bug rather than a limit.
+    private static func resolution(_ seconds: TimeInterval) -> String {
+        if seconds < 90 { return "\(Int(seconds.rounded()))s" }
+        if seconds < 5400 { return "\(Int((seconds / 60).rounded())) min" }
+        return "\(Int((seconds / 3600).rounded()))h"
+    }
+
     var body: some View {
         let gaps = max(0, trace.segments.count - 1)
         let bands = history.bands(for: trace.deviceId).count
+        let floor = history.gapFloor.map(Self.resolution)
 
         HStack(spacing: 12) {
             if bands > 0 {
@@ -329,7 +369,14 @@ struct Footnote: View {
                 // gap means the hub recorded nothing, not that the tank was at
                 // zero, and the difference matters.
                 Label(
-                    gaps == 1 ? "1 gap — nothing recorded" : "\(gaps) gaps — nothing recorded",
+                    (gaps == 1 ? "1 gap — nothing recorded" : "\(gaps) gaps — nothing recorded")
+                        + (floor.map { " (≥\($0))" } ?? ""),
+                    systemImage: "chart.line.flattrend.xyaxis"
+                )
+                .foregroundStyle(Theme.tertiaryText)
+            } else if let floor {
+                Label(
+                    "No gaps at this resolution (\(floor))",
                     systemImage: "chart.line.flattrend.xyaxis"
                 )
                 .foregroundStyle(Theme.tertiaryText)
@@ -354,11 +401,23 @@ extension HistoryRange {
     /// clusters of times with no way to tell Tuesday from Friday — the one
     /// question a week view exists to answer.
     var axisStride: AxisMarkValues {
+        // `roundLowerBound` snaps ticks to clean calendar boundaries instead of
+        // anchoring them to whenever the window happens to start. Two problems,
+        // one fix.
+        //
+        // Readability: a 24H window opened at 10:08 was ticking at 4:08 PM and
+        // labelling it "4 PM", which is a time that means nothing.
+        //
+        // And the missing trailing label. Anchored to the window start, the
+        // last tick landed exactly on the upper bound, where Charts declines to
+        // draw a label at all — neither greedy collision resolution nor
+        // insetting the plot recovers it, because the tick is on the boundary
+        // rather than merely near it. Rounded ticks never sit on the edge.
         switch self {
-        case .hour: .stride(by: .minute, count: 15)
-        case .sixHours: .stride(by: .hour, count: 1)
-        case .day: .stride(by: .hour, count: 6)
-        case .week: .stride(by: .day, count: 1)
+        case .hour: .stride(by: .minute, count: 15, roundLowerBound: true)
+        case .sixHours: .stride(by: .hour, count: 1, roundLowerBound: true)
+        case .day: .stride(by: .hour, count: 6, roundLowerBound: true)
+        case .week: .stride(by: .day, count: 1, roundLowerBound: true)
         }
     }
 

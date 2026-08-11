@@ -87,6 +87,21 @@ public final class HistoryModel {
     public private(set) var episodes: [Components.Schemas.HistoryEpisode] = []
     public private(set) var window: ClosedRange<Date>?
 
+    /// The shortest outage this range could possibly have noticed.
+    ///
+    /// Gaps are found by looking for a missing bucket, so nothing shorter than
+    /// a bucket is visible at all — the samples either side of a 60s outage
+    /// land in the same 2-minute bucket and it simply is not there to see. That
+    /// is why the same period honestly reports one gap at 1H and none at 6H,
+    /// and why the footnote states this number instead of letting the two
+    /// answers look like a contradiction.
+    ///
+    /// The real fix is finer than wording: the hub would have to report the
+    /// sample count per bucket, so a bucket holding fewer samples than its
+    /// cadence predicts could be flagged as internally holed. That is a
+    /// contract change and it is not this one.
+    public private(set) var gapFloor: TimeInterval?
+
     public var range: HistoryRange = .day {
         didSet { Task { await load() } }
     }
@@ -111,6 +126,7 @@ public final class HistoryModel {
             // Segmenting on the requested size would tear a series apart the
             // moment the cap changed the step.
             let step = TimeInterval(view.bucketS ?? 60)
+            gapFloor = Self.tolerance(step: step)
             traces = view.series.map { series in
                 HistoryTrace(
                     id: "\(series.deviceId)/\(series.metric)",
@@ -139,7 +155,7 @@ public final class HistoryModel {
         _ buckets: [Components.Schemas.HistoryBucket], step: TimeInterval
     ) -> [HistorySegment] {
         guard !buckets.isEmpty else { return [] }
-        let tolerance = max(step * 1.5, 1)
+        let tolerance = Self.tolerance(step: step)
 
         var segments: [HistorySegment] = []
         var current: [Components.Schemas.HistoryBucket] = [buckets[0]]
@@ -153,6 +169,15 @@ public final class HistoryModel {
         }
         segments.append(HistorySegment(id: segments.count, buckets: current))
         return segments
+    }
+
+    /// How large a hole has to be before it counts as one.
+    ///
+    /// 1.5x rather than 1.0x because bucket boundaries and sample timing do not
+    /// align exactly, and tearing the line on ordinary jitter would be its own
+    /// kind of lie.
+    static func tolerance(step: TimeInterval) -> TimeInterval {
+        max(step * 1.5, 1)
     }
 
     /// Episodes for one device, clamped to the visible window.
