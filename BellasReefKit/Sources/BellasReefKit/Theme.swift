@@ -51,6 +51,17 @@ public enum Theme {
     /// Safety only. See the type-level note — this is not an error colour.
     public static let safety = Color(red: 0.937, green: 0.325, blue: 0.314)
 
+    /// A probe that stopped reporting: we do not know, as distinct from we know
+    /// and it is bad.
+    ///
+    /// Deliberately neither `attention` nor `safety`. Amber would make "the tank
+    /// is slightly cold" and "nobody has any idea what the tank is doing" the
+    /// same colour, and the second is worse. Red would claim a certainty about
+    /// the water that silence is precisely the absence of. Violet sits outside
+    /// the temperature metaphor altogether, which is the point: this band is
+    /// about the instrumentation, not the tank.
+    public static let silence = Color(red: 0.639, green: 0.549, blue: 0.965)
+
     // MARK: Type
 
     /// The hero number on the Tank tab. Rounded because a temperature is a

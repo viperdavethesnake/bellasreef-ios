@@ -159,18 +159,125 @@ public final class HistoryModel {
     ///
     /// An open episode has no `cleared_at` — the hub leaves it open rather than
     /// inventing a clear time — so the band runs to the edge of the window,
-    /// which is the honest rendering of "still happening".
-    public func bands(for deviceId: String) -> [(start: Date, end: Date, bound: String)] {
+    /// which is the honest rendering of "still happening". `isOngoing` carries
+    /// that fact to the renderer rather than leaving it to infer one from a band
+    /// that reaches the right edge, which is also what a breach clearing at
+    /// exactly now looks like.
+    ///
+    /// Merged per class before returning. Overlapping rectangles composite their
+    /// opacity, so a probe with an open min breach *and* an open silence would
+    /// otherwise stack into a block dark enough to hide the trace underneath.
+    /// Merging caps it at one layer per class, which is what makes the opacity
+    /// ceiling in the view a fact rather than a hope.
+    public func bands(for deviceId: String) -> [AlertBand] {
         guard let window else { return [] }
-        return episodes
-            .filter { $0.deviceId == deviceId }
-            .map { episode in
-                (
-                    start: max(episode.raisedAt, window.lowerBound),
-                    end: min(episode.clearedAt ?? window.upperBound, window.upperBound),
-                    bound: episode.bound == .max ? "max" : "min"
+
+        let mine = episodes.filter { $0.deviceId == deviceId }
+        var out: [AlertBand] = []
+
+        for alertClass in [HistoryEpisodeClass.silence, .threshold] {
+            let clipped: [AlertBand] = mine
+                .filter { HistoryEpisodeClass(episode: $0) == alertClass }
+                .map { episode in
+                    // A silence band starts where the data stopped, not where the
+                    // hub noticed. Those are six cadences apart, and starting at
+                    // the later one would leave the gap it exists to explain
+                    // conspicuously unmarked.
+                    let began = episode.lastReadingAt ?? episode.raisedAt
+                    return AlertBand(
+                        start: max(began, window.lowerBound),
+                        end: min(episode.clearedAt ?? window.upperBound, window.upperBound),
+                        alertClass: alertClass,
+                        bound: episode.bound.map { $0 == .max ? "max" : "min" },
+                        isOngoing: episode.clearedAt == nil
+                    )
+                }
+                .filter { $0.end > $0.start }
+                .sorted { $0.start < $1.start }
+
+            out.append(contentsOf: Self.merge(clipped))
+        }
+        return out
+    }
+
+    /// Union overlapping bands of one class into single spans.
+    ///
+    /// Ongoing-ness survives a merge if any member was ongoing: the union is
+    /// still happening if any part of it is.
+    static func merge(_ bands: [AlertBand]) -> [AlertBand] {
+        guard var current = bands.first else { return [] }
+        var merged: [AlertBand] = []
+
+        for band in bands.dropFirst() {
+            if band.start <= current.end {
+                current = AlertBand(
+                    start: current.start,
+                    end: max(current.end, band.end),
+                    alertClass: current.alertClass,
+                    bound: current.bound == band.bound ? current.bound : nil,
+                    isOngoing: current.isOngoing || band.isOngoing
                 )
+            } else {
+                merged.append(current)
+                current = band
             }
-            .filter { $0.end > $0.start }
+        }
+        merged.append(current)
+        return merged
+    }
+
+    /// The newest bucket that carries real data, across every series.
+    ///
+    /// An ongoing band is drawn solid only up to here. Past it the band is
+    /// inference — we believe the condition continues because nothing has told
+    /// us otherwise — and drawing inference at the same weight as record is how
+    /// a chart starts lying politely.
+    public var lastDataAt: Date? {
+        traces.flatMap(\.segments).flatMap(\.buckets).map(\.at).max()
+    }
+}
+
+/// Which kind of episode a band is drawing.
+public enum HistoryEpisodeClass: String, Sendable {
+    case threshold, silence
+
+    init(episode: Components.Schemas.HistoryEpisode) {
+        self = episode.alertClass == .silence ? .silence : .threshold
+    }
+}
+
+/// One alert band, ready to draw.
+public struct AlertBand: Identifiable, Sendable, Equatable {
+    public let start: Date
+    public let end: Date
+    public let alertClass: HistoryEpisodeClass
+    /// `nil` for a silence, and for a merged span that covered both bounds.
+    public let bound: String?
+    /// Still open at the hub. Distinct from "reaches the window edge", which a
+    /// breach clearing right now also does.
+    public let isOngoing: Bool
+
+    public var id: String {
+        "\(alertClass.rawValue)-\(start.timeIntervalSince1970)-\(end.timeIntervalSince1970)"
+    }
+
+    /// Where the solid part of the band stops.
+    ///
+    /// A bounded episode is solid throughout: both ends are recorded fact. An
+    /// ongoing one is only fact up to the last sample the hub actually has —
+    /// past that, the band is an inference the fade is there to admit to.
+    public func settledEnd(lastData: Date?) -> Date {
+        guard isOngoing, let lastData else { return end }
+        return min(max(lastData, start), end)
+    }
+
+    public init(
+        start: Date, end: Date, alertClass: HistoryEpisodeClass, bound: String?, isOngoing: Bool
+    ) {
+        self.start = start
+        self.end = end
+        self.alertClass = alertClass
+        self.bound = bound
+        self.isOngoing = isOngoing
     }
 }

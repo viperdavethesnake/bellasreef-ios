@@ -69,7 +69,7 @@ struct TankView: View {
                     )
                 }
 
-                LightSection(monitor: monitor)
+                ActuatorSections(monitor: monitor)
             }
             .padding(.horizontal, 20)
             .padding(.top, 8)
@@ -194,21 +194,49 @@ struct AlertBanner: View {
     /// needs to know how far out of range the tank is to decide whether this is
     /// a look-in-the-morning or a get-up-now.
     private var headline: String {
-        guard alert.unit == "degC" else {
-            return "\(alert.value) \(alert.unit) — \(alert.isHigh ? "above" : "below") "
-                + "\(alert.threshold) \(alert.unit)"
+        // A silence has no reading to report — that is the whole point of it —
+        // so it says how long we have been in the dark instead. "Not reporting"
+        // rather than a temperature, because the honest answer to "how warm is
+        // the tank" here is that nobody knows.
+        if alert.kind == .silence {
+            let since = alert.lastReadingAt ?? alert.raisedAt
+            return "Not reporting for \(RelativeAge.describe(from: since))"
         }
-        let reading = TemperatureDisplay.value(celsius: alert.value, as: unit)
-        let limit = TemperatureDisplay.value(celsius: alert.threshold, as: unit)
+
+        guard let value = alert.value, let threshold = alert.threshold,
+              let alertUnit = alert.unit
+        else {
+            return "Out of range"
+        }
+        guard alertUnit == "degC" else {
+            return "\(value) \(alertUnit) — \(alert.isHigh ? "above" : "below") "
+                + "\(threshold) \(alertUnit)"
+        }
+        let reading = TemperatureDisplay.value(celsius: value, as: unit)
+        let limit = TemperatureDisplay.value(celsius: threshold, as: unit)
         let symbol = TemperatureDisplay.symbol(for: unit)
         return "\(reading)\(symbol) — \(alert.isHigh ? "above" : "below") "
             + "\(limit)\(symbol) \(alert.isHigh ? "max" : "min")"
     }
 
+    /// Violet and a broken-antenna glyph for silence: this is a statement about
+    /// the instrumentation, not about the water, and amber would file it beside
+    /// "slightly cold" when it is strictly worse than that.
+    private var tint: Color {
+        alert.kind == .silence ? Theme.silence : Theme.attention
+    }
+
+    private var glyph: String {
+        switch alert.kind {
+        case .silence: "sensor.tag.radiowaves.forward.fill"
+        case .threshold: alert.isHigh ? "thermometer.sun.fill" : "thermometer.snowflake"
+        }
+    }
+
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
-            Image(systemName: alert.isHigh ? "thermometer.sun.fill" : "thermometer.snowflake")
-                .foregroundStyle(Theme.attention)
+            Image(systemName: glyph)
+                .foregroundStyle(tint)
             VStack(alignment: .leading, spacing: 2) {
                 Text(name)
                     .font(Theme.caption.weight(.semibold))
@@ -487,32 +515,89 @@ struct Sparkline: View {
     }
 }
 
-/// Per-channel light state, with override context made loud.
-struct LightSection: View {
+/// Actuator state, grouped by what each actuator is *for*.
+///
+/// This was one "Light" heading over every state frame the hub published, which
+/// was fine while the only actuator was an LED channel and wrong the moment an
+/// `ato-pump` showed up beneath it. A state frame says what an actuator is
+/// doing and never what it is for, so the role comes from the registry.
+///
+/// A role this build does not recognise renders under its own name rather than
+/// being folded into a neighbouring section. Filing a device under the wrong
+/// heading is worse than admitting the app has not learned that word yet: the
+/// first is confidently wrong, the second is merely unfinished, and only one of
+/// them can convince somebody that a doser is a light.
+struct ActuatorSections: View {
     let monitor: TankMonitor
 
-    private var channels: [(id: String, frame: Components.Schemas.StateFrame)] {
+    private struct Channel: Identifiable {
+        let id: String
+        let frame: Components.Schemas.StateFrame
+    }
+
+    private var channels: [Channel] {
         monitor.channels
             .sorted { $0.key < $1.key }
-            .map { (id: $0.key, frame: $0.value) }
+            .map { Channel(id: $0.key, frame: $0.value) }
+    }
+
+    /// Sections in husbandry order, with anything unrecognised after them.
+    private var sections: [(role: String, title: String, channels: [Channel])] {
+        let grouped = Dictionary(grouping: channels) { monitor.roles[$0.id] ?? "" }
+        let known = ["light", "heater", "pump", "doser", "outlet"]
+
+        var out: [(role: String, title: String, channels: [Channel])] = []
+        for role in known {
+            guard let items = grouped[role], !items.isEmpty else { continue }
+            out.append((role: role, title: Self.title(for: role), channels: items))
+        }
+        for (role, items) in grouped.sorted(by: { $0.key < $1.key })
+        where !known.contains(role) && !items.isEmpty {
+            out.append((role: role, title: Self.title(for: role), channels: items))
+        }
+        return out
+    }
+
+    /// The contract's roles in the operator's words. Anything else keeps its own
+    /// name, capitalised and nothing more, so the screen still says something
+    /// true about a role this build predates.
+    private static func title(for role: String) -> String {
+        switch role {
+        case "light": "Light"
+        case "heater": "Heat"
+        case "pump": "Flow"
+        case "doser": "Dosing"
+        case "outlet": "Outlets"
+        case "": "Unassigned"
+        default: role.capitalized
+        }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("Light")
-                .font(Theme.sectionTitle)
-                .foregroundStyle(Theme.secondaryText)
-
+        VStack(alignment: .leading, spacing: 20) {
             if channels.isEmpty {
-                // Empty state (§7.1), distinguished from loading: the socket is
-                // up, and no channel has reported.
-                Text("No channels reporting yet")
-                    .font(Theme.caption)
-                    .foregroundStyle(Theme.secondaryText)
+                VStack(alignment: .leading, spacing: 12) {
+                    Text("Equipment")
+                        .font(Theme.sectionTitle)
+                        .foregroundStyle(Theme.secondaryText)
+                    // Empty state (§7.1), distinguished from loading: the socket
+                    // is up and nothing has reported.
+                    Text("No channels reporting yet")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                }
             }
 
-            ForEach(channels, id: \.id) { channel in
-                ChannelRow(id: channel.id, frame: channel.frame)
+            ForEach(sections, id: \.role) { section in
+                VStack(alignment: .leading, spacing: 12) {
+                    Text(section.title)
+                        .font(Theme.sectionTitle)
+                        .foregroundStyle(Theme.secondaryText)
+
+                    ForEach(section.channels) { channel in
+                        ChannelRow(id: channel.id, frame: channel.frame)
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

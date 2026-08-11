@@ -202,13 +202,49 @@ struct TraceChart: View {
 
             Chart {
                 // Bands first, so the curve draws over them rather than under.
-                ForEach(Array(history.bands(for: trace.deviceId).enumerated()), id: \.offset) {
-                    _, band in
-                    RectangleMark(
-                        xStart: .value("from", band.start),
-                        xEnd: .value("to", band.end)
-                    )
-                    .foregroundStyle(Theme.attention.opacity(0.18))
+                ForEach(history.bands(for: trace.deviceId)) { band in
+                    let tint = band.alertClass == .silence ? Theme.silence : Theme.attention
+                    let solidEnd = band.settledEnd(lastData: history.lastDataAt)
+
+                    // The part backed by data. Capped at 0.16, and the model
+                    // merges same-class bands, so at most two of these can ever
+                    // overlap — a ceiling near 0.30, which still lets the trace
+                    // read through instead of disappearing into a slab.
+                    if solidEnd > band.start {
+                        RectangleMark(
+                            xStart: .value("from", band.start),
+                            xEnd: .value("to", solidEnd)
+                        )
+                        .foregroundStyle(tint.opacity(0.16))
+                    }
+
+                    // Past the last sample an ongoing band is inference, not
+                    // record: we believe it continues because nothing has said
+                    // otherwise. Fading says that. Dropping it would read as
+                    // "resolved", which is the opposite of what is known.
+                    if band.isOngoing, band.end > solidEnd {
+                        RectangleMark(
+                            xStart: .value("from", solidEnd),
+                            xEnd: .value("to", band.end)
+                        )
+                        .foregroundStyle(
+                            .linearGradient(
+                                colors: [tint.opacity(0.16), tint.opacity(0.02)],
+                                startPoint: .leading,
+                                endPoint: .trailing
+                            )
+                        )
+                    }
+
+                    // An ongoing band gets an edge at its leading boundary. A
+                    // bounded episode is closed on both sides by its own fill;
+                    // an open one runs off the chart, and without this it looks
+                    // identical to one that happened to clear just now.
+                    if band.isOngoing {
+                        RuleMark(x: .value("from", band.start))
+                            .foregroundStyle(tint.opacity(0.55))
+                            .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [3, 2]))
+                    }
                 }
 
                 ForEach(trace.segments) { segment in
@@ -239,8 +275,20 @@ struct TraceChart: View {
                 }
             }
             .chartYScale(domain: yDomain)
+            // The x domain is the range the operator picked, not the extent of
+            // whatever data came back. Letting Charts infer it meant 7D drew the
+            // last four hours across the full width whenever the hub had been
+            // down — a chart that silently redefines "7 days" as "everything I
+            // have" is how a gap stops looking like a gap.
+            .chartXScale(domain: history.window ?? Date.distantPast...Date())
             .chartYAxis { AxisMarks(position: .leading) }
-            .chartXAxis { AxisMarks(values: .automatic(desiredCount: 4)) }
+            .chartXAxis {
+                AxisMarks(values: history.range.axisStride) { value in
+                    AxisGridLine()
+                    AxisTick()
+                    AxisValueLabel(format: history.range.axisFormat)
+                }
+            }
             .frame(height: 180)
             .accessibilityLabel(Self.spoken(trace: trace, history: history))
 
@@ -290,4 +338,37 @@ struct Footnote: View {
         }
         .font(Theme.caption)
     }
+}
+
+
+/// Axis presentation for a range.
+///
+/// In the view layer, not in HistoryModel: `AxisMarkValues` is a Charts
+/// type, and a model that imports a rendering framework to describe itself
+/// has stopped being a model.
+extension HistoryRange {
+    /// Where the x-axis puts its labels.
+    ///
+    /// Stated per range rather than left to `.automatic`. Over seven days
+    /// automatic labelling picks hours and renders seven identical-looking
+    /// clusters of times with no way to tell Tuesday from Friday — the one
+    /// question a week view exists to answer.
+    var axisStride: AxisMarkValues {
+        switch self {
+        case .hour: .stride(by: .minute, count: 15)
+        case .sixHours: .stride(by: .hour, count: 1)
+        case .day: .stride(by: .hour, count: 6)
+        case .week: .stride(by: .day, count: 1)
+        }
+    }
+
+    /// Matching label format: days get a weekday, everything shorter gets a clock.
+    var axisFormat: Date.FormatStyle {
+        switch self {
+        case .week: .dateTime.weekday(.abbreviated)
+        case .day: .dateTime.hour()
+        default: .dateTime.hour().minute()
+        }
+    }
+
 }

@@ -88,6 +88,23 @@ public actor HubClient {
         }
     }
 
+    /// Every registered device, sensors and actuators alike.
+    ///
+    /// The Tank tab needs this for `role`: a state frame says what an actuator
+    /// is doing and never what it is for, so without the registry every PWM
+    /// channel on the hub renders under one heading regardless of whether it
+    /// drives an LED or a dosing pump.
+    public func devices() async throws -> [Components.Schemas.DeviceView] {
+        switch try await client.listDevices() {
+        case let .ok(response): return try response.body.json
+        case .unauthorized: throw ClientError.unauthorized
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the devices query")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("devices returned \(statusCode)")
+        }
+    }
+
     /// Name a device, or pass `nil` to go back to the raw id.
     public func rename(deviceId: String, to name: String?) async throws {
         switch try await client.renameDevice(
@@ -178,12 +195,14 @@ public actor HubClient {
         case let .ok(response):
             return try response.body.json.active.map { row in
                 TankMonitor.Alert(
+                    kind: row.alertClass == .silence ? .silence : .threshold,
                     deviceId: row.deviceId,
-                    bound: row.bound == .max ? "max" : "min",
+                    bound: row.bound.map { $0 == .max ? "max" : "min" },
                     value: row.raisedValue,
                     threshold: row.threshold,
                     unit: row.unit,
-                    raisedAt: row.raisedAt
+                    raisedAt: row.raisedAt,
+                    lastReadingAt: row.lastReadingAt
                 )
             }
         case .unauthorized:

@@ -232,17 +232,31 @@
         "additionalProperties": false,
         "description": "One alert episode.",
         "properties": {
+          "alert_class": {
+            "enum": [
+              "threshold",
+              "silence"
+            ],
+            "title": "Alert Class",
+            "type": "string"
+          },
           "bound": {
             "enum": [
               "min",
               "max"
             ],
             "title": "Bound",
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "clear_margin": {
             "title": "Clear Margin",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "cleared_at": {
             "format": "date-time",
@@ -268,6 +282,14 @@
             "title": "Id",
             "type": "string"
           },
+          "last_reading_at": {
+            "format": "date-time",
+            "title": "Last Reading At",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "raised_at": {
             "format": "date-time",
             "title": "Raised At",
@@ -275,7 +297,10 @@
           },
           "raised_value": {
             "title": "Raised Value",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "sensor_type": {
             "title": "Sensor Type",
@@ -283,25 +308,25 @@
           },
           "threshold": {
             "title": "Threshold",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "unit": {
             "title": "Unit",
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "id",
           "device_id",
           "sensor_type",
-          "bound",
-          "threshold",
-          "clear_margin",
-          "unit",
-          "raised_at",
-          "raised_value",
-          "cleared_at",
-          "cleared_value"
+          "alert_class",
+          "raised_at"
         ],
         "title": "AlertView",
         "type": "object"
@@ -663,13 +688,24 @@
         "additionalProperties": false,
         "description": "An alert episode, for banding under the curve.",
         "properties": {
+          "alert_class": {
+            "enum": [
+              "threshold",
+              "silence"
+            ],
+            "title": "Alert Class",
+            "type": "string"
+          },
           "bound": {
             "enum": [
               "min",
               "max"
             ],
             "title": "Bound",
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "cleared_at": {
             "format": "date-time",
@@ -690,6 +726,14 @@
             "title": "Device Id",
             "type": "string"
           },
+          "last_reading_at": {
+            "format": "date-time",
+            "title": "Last Reading At",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "raised_at": {
             "format": "date-time",
             "title": "Raised At",
@@ -697,7 +741,10 @@
           },
           "raised_value": {
             "title": "Raised Value",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "sensor_type": {
             "title": "Sensor Type",
@@ -705,23 +752,24 @@
           },
           "threshold": {
             "title": "Threshold",
-            "type": "number"
+            "type": [
+              "number",
+              "null"
+            ]
           },
           "unit": {
             "title": "Unit",
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           }
         },
         "required": [
           "device_id",
           "sensor_type",
-          "bound",
-          "threshold",
-          "unit",
-          "raised_at",
-          "raised_value",
-          "cleared_at",
-          "cleared_value"
+          "alert_class",
+          "raised_at"
         ],
         "title": "HistoryEpisode",
         "type": "object"

@@ -60,17 +60,26 @@ public final class TankMonitor {
 
     /// An open threshold breach, as the banner renders it.
     public struct Alert: Equatable, Sendable, Identifiable {
+        /// A breach is about a number. A silence is about the absence of one,
+        /// and every field below except `raisedAt` is nil for it — which is the
+        /// event, not missing data.
+        public enum Kind: String, Sendable { case threshold, silence }
+
+        public let kind: Kind
         public let deviceId: String
-        public let bound: String
-        public let value: Double
-        public let threshold: Double
-        public let unit: String
+        public let bound: String?
+        public let value: Double?
+        public let threshold: Double?
+        public let unit: String?
         public let raisedAt: Date
+        /// Silence only: when the probe was last heard from.
+        public let lastReadingAt: Date?
 
         /// Stable across updates so SwiftUI does not re-animate a banner that
-        /// merely refreshed. One breach per bound per device is the invariant
-        /// the hub's partial unique index enforces, so this is unique.
-        public var id: String { "\(deviceId)/\(bound)" }
+        /// merely refreshed. The hub's partial unique index is per (device,
+        /// class, bound), so this key matches the invariant exactly — including
+        /// the case where a probe is mid-breach *and* silent.
+        public var id: String { "\(deviceId)/\(kind.rawValue)/\(bound ?? "-")" }
 
         public var isHigh: Bool { bound == "max" }
     }
@@ -85,6 +94,13 @@ public final class TankMonitor {
     public private(set) var histories: [String: [Double]] = [:]
     /// Latest state per actuator, keyed by id.
     public private(set) var channels: [String: Components.Schemas.StateFrame] = [:]
+
+    /// `device_id` -> declared role, from the registry.
+    ///
+    /// A state frame carries what an actuator is *doing* and never what it is
+    /// *for*. Without this the Tank tab filed every PWM channel under "Light",
+    /// which an `ato-pump` proved wrong in the least ambiguous way available.
+    public private(set) var roles: [String: String] = [:]
     public private(set) var alerts: [Alert] = []
     public private(set) var lastFrameAt: Date?
 
@@ -245,6 +261,19 @@ public final class TankMonitor {
         } catch {
             log.error("could not seed alerts: \(String(describing: error))")
         }
+
+        do {
+            roles = Dictionary(
+                uniqueKeysWithValues: try await client.devices().compactMap { device in
+                    device.role.map { (device.deviceId, $0) }
+                }
+            )
+        } catch {
+            // Not fatal, and the section headings degrade honestly: an actuator
+            // whose role we could not fetch renders under "Other" rather than
+            // being silently filed as a light.
+            log.error("could not load device roles: \(String(describing: error))")
+        }
     }
 
     private func apply(_ frame: StreamFrame) {
@@ -301,12 +330,14 @@ public final class TankMonitor {
 
     private func apply(_ alert: Components.Schemas.SensorAlert) {
         let entry = Alert(
+            kind: .threshold,
             deviceId: alert.deviceId,
             bound: alert.bound == .max ? "max" : "min",
             value: alert.value,
             threshold: alert.threshold,
             unit: alert.unit,
-            raisedAt: alert.emittedAt
+            raisedAt: alert.emittedAt,
+            lastReadingAt: nil
         )
         alerts.removeAll { $0.id == entry.id }
         if alert.state == .breach {

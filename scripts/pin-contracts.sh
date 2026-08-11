@@ -3,7 +3,7 @@
 #
 # The app never edits these by hand. A refresh that changes generated types
 # shows up as compile errors in BellasReefKit, which is exactly what PRD G3 is
-# for — drift is a build failure, not a runtime surprise on a tank.
+# for — drift is a build failure, not a runtime surprise.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -22,7 +22,7 @@ gh run download "$RUN_ID" -R "$BACKEND_REPO" -n client-contracts -D "$tmp"
 
 cp "$tmp/openapi.json" Contracts/openapi.json
 cp "$tmp/stream-frames.schema.json" Contracts/stream-frames.schema.json
-# The generator plugin reads the spec from the target's own directory.
+# The generator plugin reads from the target's own directory.
 cp "$tmp/openapi.json" BellasReefKit/Sources/BellasReefAPI/openapi.json
 
 echo "pinned run $RUN_ID"
