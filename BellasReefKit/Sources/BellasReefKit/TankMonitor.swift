@@ -108,6 +108,18 @@ public final class TankMonitor {
     private let stream: StreamClient
     private var task: Task<Void, Never>?
 
+    /// Called once when the hub refuses this device's credential outright.
+    ///
+    /// The monitor cannot fix that and must not pretend to: retrying a revoked
+    /// token forever is noise, and the previous behaviour — set `.disconnected`
+    /// and return — left the Tank tab frozen with the app still believing it was
+    /// paired. There was no explanation and no route back; the only recovery an
+    /// operator would find is delete and reinstall.
+    ///
+    /// Owning the *consequence* is the app's job, not the monitor's, so this
+    /// hands it up rather than reaching for `AppModel` from inside the package.
+    public var onCredentialRejected: (@MainActor () -> Void)?
+
     /// How many samples the sparkline keeps. ~25 minutes at the DS18B20's
     /// honest cadence; enough to see a trend, not enough to be a chart.
     private let historyLimit = 300
@@ -239,7 +251,10 @@ public final class TankMonitor {
                 connection = .disconnected(error.description)
             } catch let error as HubClient.ClientError {
                 connection = .disconnected(error.description)
-                if case .unauthorized = error { return }
+                if case .unauthorized = error {
+                    onCredentialRejected?()
+                    return
+                }
             } catch {
                 connection = .disconnected(error.localizedDescription)
             }

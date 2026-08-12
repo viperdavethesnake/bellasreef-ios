@@ -1,5 +1,6 @@
 // Bella's Reef iOS — closed source.
 
+import BellasReefAPI
 import BellasReefKit
 import SwiftUI
 
@@ -7,6 +8,23 @@ import SwiftUI
 struct BellasReefApp: App {
     @State private var model = AppModel()
     @State private var preferences = Preferences()
+
+    init() {
+        #if DEBUG
+        // A Keychain credential survives a reinstall, so a UI test on a device
+        // that has ever paired can never reach the pairing screens — which is
+        // exactly how the pairing assertions became the ones least likely to
+        // run. This is the only way to put the app back in its first-launch
+        // state from outside the process.
+        //
+        // Debug only: the flag does not exist in a shipped build, so nothing a
+        // release binary can be handed will clear a working pairing.
+        if ProcessInfo.processInfo.arguments.contains("-uitest-reset-pairing") {
+            try? TokenStore().clear()
+            HubMemory.forget()
+        }
+        #endif
+    }
 
     var body: some Scene {
         WindowGroup {
@@ -41,6 +59,9 @@ final class AppModel {
     private(set) var client: HubClient?
     private(set) var monitor: TankMonitor?
     private(set) var catalog: DeviceCatalog?
+    /// Why the app is back on the pairing screen, when it did not get there by
+    /// the operator asking. Cleared once a new pairing lands.
+    var notice: String?
     /// Held here so views can reach preferences through the one model they
     /// already have, rather than every sheet re-declaring an @Environment.
     var preferences: Preferences?
@@ -61,15 +82,40 @@ final class AppModel {
     func adopt(_ client: HubClient, hub: Hub) {
         self.client = client
         let monitor = TankMonitor(client: client, stream: StreamClient(baseURL: hub.baseURL))
+        monitor.onCredentialRejected = { [weak self] in self?.credentialRejected() }
         self.monitor = monitor
         self.catalog = DeviceCatalog(client: client)
+        notice = nil
         phase = .paired(hub)
         monitor.start()
     }
 
-    /// How many devices the hub still trusts, for the sign-out warning.
-    func liveClientCount() async -> Int? {
-        try? await client?.liveClientCount()
+    /// The hub refused this device's credential: revoked, or the hub was
+    /// rebuilt underneath it.
+    ///
+    /// Land on the pairing screen with a sentence saying why. The previous
+    /// behaviour left `phase` at `.paired` with a dead reconnect loop, so the
+    /// Tank tab froze, said nothing, and offered nothing — and pairing again is
+    /// genuinely the correct next move, which is the one thing the operator
+    /// could not reach.
+    func credentialRejected() {
+        guard case .paired = phase else { return }
+        monitor?.stop()
+        let outgoing = client
+        client = nil
+        monitor = nil
+        catalog = nil
+        phase = .choosingHub
+        notice = "The hub no longer accepts this device — it was revoked, or the hub was "
+            + "rebuilt. Pair again to get back in."
+        // The hub is still remembered so the operator can re-pair with one tap;
+        // only the dead credential goes.
+        Task { try? await outgoing?.forget() }
+    }
+
+    /// The devices the hub still trusts. `nil` when it could not be asked.
+    func clients() async -> [Components.Schemas.Client]? {
+        try? await client?.clients()
     }
 
     /// Sign out, revoking on the hub first.
@@ -90,6 +136,7 @@ final class AppModel {
         monitor = nil
         catalog = nil
         phase = .choosingHub
+        notice = nil
         HubMemory.forget()
         return failure
     }
@@ -102,10 +149,26 @@ final class AppModel {
 enum HubMemory {
     private static let key = "com.bellasreef.lastHub"
     private static let nameKey = "com.bellasreef.lastHubName"
+    private static let clientKey = "com.bellasreef.clientId"
 
-    static func remember(_ hub: Hub) {
+    /// `clientId` is the row the hub created for *this* device.
+    ///
+    /// Kept so the paired-devices list can say "This device" and withhold a
+    /// Revoke button from it. `GET /clients` does not mark which row is the
+    /// caller, and a list of similar names each with a Revoke button beside it
+    /// is a way to sign yourself out while believing you are removing a lost
+    /// phone. Sign-out already exists, with its own last-device warning.
+    static func remember(_ hub: Hub, clientId: String? = nil) {
         UserDefaults.standard.set(hub.baseURL.absoluteString, forKey: key)
         UserDefaults.standard.set(hub.name, forKey: nameKey)
+        if let clientId { UserDefaults.standard.set(clientId, forKey: clientKey) }
+    }
+
+    /// Nil for a pairing made before this was recorded. The list then shows no
+    /// "This device" row rather than guessing at one — degrading honestly beats
+    /// labelling the wrong phone.
+    static func recallClientId() -> String? {
+        UserDefaults.standard.string(forKey: clientKey)
     }
 
     /// The name is stored alongside the address rather than derived from it.
@@ -124,5 +187,6 @@ enum HubMemory {
     static func forget() {
         UserDefaults.standard.removeObject(forKey: key)
         UserDefaults.standard.removeObject(forKey: nameKey)
+        UserDefaults.standard.removeObject(forKey: clientKey)
     }
 }
