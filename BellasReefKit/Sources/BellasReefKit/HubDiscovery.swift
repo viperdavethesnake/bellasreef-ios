@@ -50,10 +50,37 @@ public struct Hub: Sendable, Hashable, Identifiable {
 @MainActor
 @Observable
 public final class HubDiscovery {
+
+    /// What the browser is doing, so the screen can say it.
+    ///
+    /// `isBrowsing` alone could not distinguish "starting", "found nothing yet"
+    /// and "discovery is dead" — and the last of those needs to send the
+    /// operator to the manual field rather than let them keep waiting.
+    public enum State: Equatable, Sendable {
+        case idle
+        case searching
+        /// The browser failed. Recoverable, and retried automatically.
+        case failed(String)
+    }
+
     public private(set) var hubs: [Hub] = []
     public private(set) var isBrowsing = false
+    public private(set) var state: State = .idle
+
+    /// When the current browse began, for the empty-state timer.
+    public private(set) var searchingSince: Date?
 
     private var browser: NWBrowser?
+    private var retry: Task<Void, Never>?
+    private var consecutiveFailures = 0
+
+    /// How long the screen waits before promoting the manual field.
+    ///
+    /// Bonjour on a healthy network answers in well under a second; ten seconds
+    /// of nothing means it is not going to work here. Long enough not to nag
+    /// during a normal find, short enough that nobody sits watching a spinner
+    /// wondering whether it is broken.
+    public static let emptyStateAfter: TimeInterval = 10
 
     public init() {}
 
@@ -67,10 +94,29 @@ public final class HubDiscovery {
 
         browser.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
+                guard let self else { return }
                 switch state {
-                case .ready: self?.isBrowsing = true
-                case .failed, .cancelled: self?.isBrowsing = false
-                default: break
+                case .ready:
+                    self.isBrowsing = true
+                    self.state = .searching
+                    self.searchingSince = Date()
+                    self.consecutiveFailures = 0
+                case let .failed(error):
+                    // The bug this class shipped with: `isBrowsing = false` and
+                    // nothing else. The NWBrowser stayed non-nil, so `start()`
+                    // returned immediately at its `browser == nil` guard and the
+                    // screen searched forever with a dead browser behind it.
+                    //
+                    // A cancelled NWBrowser cannot be restarted, so recovery is
+                    // always cancel-and-recreate.
+                    self.isBrowsing = false
+                    self.state = .failed(String(describing: error))
+                    log.error("browser failed: \(String(describing: error))")
+                    self.scheduleRestart()
+                case .cancelled:
+                    self.isBrowsing = false
+                default:
+                    break
                 }
             }
         }
@@ -86,9 +132,65 @@ public final class HubDiscovery {
     }
 
     public func stop() {
+        retry?.cancel()
+        retry = nil
         browser?.cancel()
         browser = nil
         isBrowsing = false
+        state = .idle
+        searchingSince = nil
+    }
+
+    /// Tear the browser down and build a new one.
+    ///
+    /// The only recovery there is: an NWBrowser that has failed or been
+    /// cancelled cannot be restarted, so "retry" means "replace". This is what
+    /// pull-to-refresh does, what a `.failed` state schedules, and what
+    /// returning to the foreground triggers.
+    ///
+    /// Results are cleared first. Keeping the old list across a restart would
+    /// show hubs that were found by a browser which has since died — plausible
+    /// rows that may no longer exist, which is worse than an honest empty list
+    /// for the second it takes to find them again.
+    public func restart() {
+        stop()
+        hubs = []
+        start()
+    }
+
+    /// Restart after backing off.
+    ///
+    /// Bounded backoff rather than an immediate retry: a browser that fails the
+    /// instant it starts — no network permission, no interface — would
+    /// otherwise spin as fast as the OS could refuse it, and the screen would
+    /// flicker between searching and failed rather than settling on something
+    /// an operator can read.
+    private func scheduleRestart() {
+        retry?.cancel()
+        consecutiveFailures += 1
+        let delay = min(pow(2.0, Double(consecutiveFailures - 1)), 30)
+        retry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                guard let self, self.state != .idle || self.browser != nil else { return }
+                let failures = self.consecutiveFailures
+                self.restart()
+                self.consecutiveFailures = failures
+            }
+        }
+    }
+
+    /// Called when the app returns to the foreground.
+    ///
+    /// iOS tears network resources down in the background, and a browser that
+    /// was alive when the app was backgrounded is frequently not alive when it
+    /// comes back — without ever reporting `.failed`, so nothing above would
+    /// notice. Restarting unconditionally is cheap and the alternative is a
+    /// screen that silently stopped looking.
+    public func refreshOnForeground() {
+        guard browser != nil || state != .idle else { return }
+        restart()
     }
 
     private func refresh(_ results: Set<NWBrowser.Result>) async {

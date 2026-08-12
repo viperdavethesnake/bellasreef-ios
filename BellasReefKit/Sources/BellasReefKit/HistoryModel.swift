@@ -85,6 +85,21 @@ public final class HistoryModel {
     public private(set) var state: State = .idle
     public private(set) var traces: [HistoryTrace] = []
     public private(set) var episodes: [Components.Schemas.HistoryEpisode] = []
+    /// The visible window, and the chart's x domain verbatim.
+    ///
+    /// The domain IS the selected range. Letting Charts infer it from returned
+    /// data meant 7D quietly redrew itself as "the last four hours, full width"
+    /// whenever the hub had been down, which is how a gap stops looking like a
+    /// gap.
+    ///
+    /// KNOWN CONSEQUENCE, ruled won't-fix: Charts does not lay out an axis label
+    /// for a mark that sits exactly on the domain's upper bound, so the trailing
+    /// label is absent at every range. It is not a clipping or collision
+    /// problem — trailing padding, `.greedy` collision resolution and insetting
+    /// the plot were all tried and none reach it, because the label is never
+    /// laid out at all. The only remaining fix is widening the domain past the
+    /// selected range, which would trade a correctness property for a cosmetic
+    /// one. The domain stays honest and the label stays missing.
     public private(set) var window: ClosedRange<Date>?
 
     /// The shortest outage this range could possibly have noticed.

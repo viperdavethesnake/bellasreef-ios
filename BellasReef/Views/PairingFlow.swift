@@ -7,20 +7,19 @@ import SwiftUI
 /// Discovery → identify → pair, per auth.md §2.
 struct PairingFlow: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
     @State private var discovery = HubDiscovery()
     @State private var manualAddress = ""
     @State private var selected: Hub?
+    /// Drives the searching -> empty transition without a timer of its own.
+    @State private var now = Date()
 
     var body: some View {
         NavigationStack {
             List {
                 Section("On this network") {
                     if discovery.hubs.isEmpty {
-                        HStack(spacing: 10) {
-                            ProgressView().controlSize(.small)
-                            Text(discovery.isBrowsing ? "Looking for your hub…" : "Starting…")
-                                .foregroundStyle(Theme.secondaryText)
-                        }
+                        DiscoveryStatus(discovery: discovery, now: now)
                     }
                     ForEach(discovery.hubs) { hub in
                         Button { selected = hub } label: {
@@ -54,10 +53,85 @@ struct PairingFlow: View {
             .scrollContentBackground(.hidden)
             .reefBackground()
             .navigationTitle("Find your hub")
+            // Platform convention, and the manual recovery path. A browser
+            // that has wedged is invisible from here, and the gesture people
+            // already reach for is the one that fixes it.
+            .refreshable { discovery.restart() }
+            // A clock, so "searching" becomes "nothing here" without the model
+            // owning a timer. Discovery publishes when results change; the
+            // *absence* of results changes nothing, so nothing would redraw.
+            .task(id: discovery.searchingSince) {
+                while !Task.isCancelled {
+                    now = Date()
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
             .onAppear { discovery.start() }
             .onDisappear { discovery.stop() }
+            .onChange(of: scenePhase) { _, phase in
+                // iOS tears network resources down in the background, often
+                // without the browser ever reporting .failed — so nothing else
+                // would notice it had stopped looking.
+                if phase == .active { discovery.refreshOnForeground() }
+            }
             .sheet(item: $selected) { hub in
                 HubIdentifyCard(hub: hub)
+            }
+        }
+    }
+
+    /// The three §7.1 states this section can be in.
+    ///
+    /// Searching, empty and failed were one spinner before. An empty list and a
+    /// dead browser looked identical, and only one of them means "type the
+    /// address instead" — which is the whole reason the manual field exists.
+    private struct DiscoveryStatus: View {
+        let discovery: HubDiscovery
+        let now: Date
+
+        private var searchedFor: TimeInterval {
+            guard let since = discovery.searchingSince else { return 0 }
+            return now.timeIntervalSince(since)
+        }
+
+        var body: some View {
+            switch discovery.state {
+            case .failed:
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Discovery is not running", systemImage: "wifi.exclamationmark")
+                        .font(.headline)
+                        .foregroundStyle(Theme.attention)
+                    // Named, not silent. The browser is retrying on its own, and
+                    // an operator who does not know that will pull-to-refresh
+                    // forever or conclude the hub is dead.
+                    Text("The app could not search this network. Retrying — "
+                         + "or enter the address below.")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                .padding(.vertical, 4)
+
+            case .searching where searchedFor >= HubDiscovery.emptyStateAfter:
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No hub found on this network")
+                        .font(.headline)
+                        .foregroundStyle(Theme.primaryText)
+                    // Bonjour genuinely does not work on guest networks, across
+                    // VLANs, or over a VPN. After ten seconds the honest advice
+                    // is to stop waiting.
+                    Text("Bonjour does not cross guest networks, VLANs or a VPN. "
+                         + "Enter the address below, or pull to search again.")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                .padding(.vertical, 4)
+
+            case .searching, .idle:
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(discovery.isBrowsing ? "Looking for your hub…" : "Starting…")
+                        .foregroundStyle(Theme.secondaryText)
+                }
             }
         }
     }
