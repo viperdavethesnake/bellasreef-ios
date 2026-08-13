@@ -93,17 +93,11 @@ struct SystemView: View {
             .scrollContentBackground(.hidden)
             .reefBackground()
             .navigationTitle("System")
-            .task {
-                // Two independent round trips to a Pi over WiFi; neither needs
-                // the other's answer, so neither waits for it.
-                async let devices: Void = loadClients()
-                do {
-                    hubName = try await model.client?.info().name
-                } catch {
-                    hubNameFailed = true
-                }
-                await devices
-            }
+            .task { await loadEverything() }
+            // The list is otherwise a snapshot from whenever this tab last
+            // appeared, and the hub changes under it — another device pairs, a
+            // client is revoked from the CLI — with nothing pushed to say so.
+            .refreshable { await loadEverything() }
             .sheet(isPresented: $addingDevice) {
                 AddDeviceView(onApproved: { Task { await loadClients() } })
             }
@@ -242,6 +236,19 @@ struct SystemView: View {
     /// different words: "no other device is paired" is a claim this view must
     /// not make when what it means is "the hub did not answer".
     private var countKnown: Bool { clients != nil }
+
+    private func loadEverything() async {
+        // Two independent round trips to a Pi over WiFi; neither needs the
+        // other's answer, so neither waits for it.
+        async let devices: Void = loadClients()
+        do {
+            hubName = try await model.client?.info().name
+            hubNameFailed = false
+        } catch {
+            hubNameFailed = true
+        }
+        await devices
+    }
 
     private func loadClients() async {
         if let rows = await model.clients() {
