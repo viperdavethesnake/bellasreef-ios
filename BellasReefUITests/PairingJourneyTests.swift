@@ -276,6 +276,64 @@ final class PairingJourneyTests: XCTestCase {
         app.buttons["Cancel"].tap()
     }
 
+    // MARK: - Hardware adoption
+
+    /// System → Hardware, up to but not including adopting anything.
+    ///
+    /// Same philosophy as the approver test above: reaching the sheet and
+    /// meeting the safety confirm is what this proves. Actually adopting
+    /// starts real actuator output and stays a bench decision.
+    func testTheAdoptSheetIsReachableAndGuarded() throws {
+        let app = XCUIApplication()
+        app.launch()
+
+        let systemTab = app.tabBars.buttons["System"]
+        guard systemTab.waitForExistence(timeout: 20) else {
+            throw XCTSkip("not paired, so the System tab does not exist yet.")
+        }
+        systemTab.tap()
+
+        XCTAssertTrue(
+            app.staticTexts["Hardware"].waitForExistence(timeout: 10),
+            "no Hardware section — the inventory has nowhere to live"
+        )
+
+        let channel = app.buttons["hardware-available-channel"].firstMatch
+        guard channel.waitForExistence(timeout: 10) else {
+            throw XCTSkip(
+                "no unclaimed channel on this hub, so the adopt sheet cannot be "
+                + "reached. Free a channel (unadopt) to exercise this test."
+            )
+        }
+        channel.tap()
+
+        let nameField = app.textFields["adopt-name-field"]
+        XCTAssertTrue(nameField.waitForExistence(timeout: 10), "adopt sheet has no name field")
+
+        // A blank name must not be submittable.
+        nameField.tap()
+        nameField.press(forDuration: 1.0)
+        app.menuItems["Select All"].tap()
+        nameField.typeText(XCUIKeyboardKey.delete.rawValue)
+        XCTAssertFalse(
+            app.buttons["adopt-confirm-button"].isEnabled,
+            "an unnamed device was adoptable"
+        )
+
+        // Restore a name; the safety confirm must stand between the tap and
+        // the bind for an actuator channel.
+        nameField.typeText("Bench light")
+        app.buttons["adopt-confirm-button"].tap()
+        XCTAssertTrue(
+            app.staticTexts["Start real output?"].waitForExistence(timeout: 5),
+            "no safety confirm before adopting an actuator channel"
+        )
+        attach(app, named: "adopt-safety-confirm")
+
+        app.buttons["Cancel"].firstMatch.tap()   // the dialog's cancel
+        app.buttons["Cancel"].firstMatch.tap()   // the sheet's cancel
+    }
+
     private func attach(_ app: XCUIApplication, named name: String) {
         XCTContext.runActivity(named: name) { activity in
             let shot = XCTAttachment(screenshot: app.screenshot())
