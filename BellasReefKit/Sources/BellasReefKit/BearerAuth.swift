@@ -47,10 +47,16 @@ struct BearerAuthMiddleware: ClientMiddleware {
 final class TokenProvider: @unchecked Sendable {
     private let lock = NSLock()
     private var _resolve: (@Sendable () async throws -> String)?
+    private var _resolveFresh: (@Sendable () async throws -> String)?
 
     var resolve: (@Sendable () async throws -> String)? {
         get { lock.withLock { _resolve } }
         set { lock.withLock { _resolve = newValue } }
+    }
+
+    var resolveFresh: (@Sendable () async throws -> String)? {
+        get { lock.withLock { _resolveFresh } }
+        set { lock.withLock { _resolveFresh = newValue } }
     }
 
     func token() async throws -> String {
@@ -58,5 +64,12 @@ final class TokenProvider: @unchecked Sendable {
             throw HubClient.ClientError.unexpected("no credential is available yet")
         }
         return try await resolve()
+    }
+
+    func freshToken() async throws -> String {
+        guard let resolveFresh else {
+            throw HubClient.ClientError.unexpected("no credential is available yet")
+        }
+        return try await resolveFresh()
     }
 }

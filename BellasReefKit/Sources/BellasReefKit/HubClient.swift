@@ -144,6 +144,7 @@ public actor HubClient {
             middlewares: [BearerAuthMiddleware(token: { try await provider.token() })]
         )
         provider.resolve = { [self] in try await accessTokenNow() }
+        provider.resolveFresh = { [self] in try await freshAccessTokenNow() }
     }
 
     // MARK: Discovery
@@ -408,6 +409,17 @@ public actor HubClient {
         mintInFlight = work
         defer { mintInFlight = nil }
         return try await work.value
+    }
+
+    /// A token that is *known* fresh: the cache is dropped first, so the hub
+    /// is consulted. This is what turns a data-call 401 into an answer — a
+    /// stale token gets replaced, a revoked device gets `mintToken`'s
+    /// rejection and the handler fires. Joins an in-flight mint rather than
+    /// stacking a second one: that mint is fresh by definition.
+    public func freshAccessTokenNow() async throws -> String {
+        accessToken = nil
+        accessExpiry = nil
+        return try await accessTokenNow()
     }
 
     private func mintFresh() async throws -> String {
