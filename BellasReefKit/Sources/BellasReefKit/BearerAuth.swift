@@ -16,6 +16,10 @@ import OpenAPIRuntime
 /// silently underneath without rebuilding the client.
 struct BearerAuthMiddleware: ClientMiddleware {
     let token: @Sendable () async throws -> String
+    /// Asked only after a 401: drops the cached token and mints. Throwing
+    /// here (the mint itself was rejected) is the revocation signal — the
+    /// request is not resent.
+    let freshToken: @Sendable () async throws -> String
 
     func intercept(
         _ request: HTTPRequest,
@@ -32,9 +36,36 @@ struct BearerAuthMiddleware: ClientMiddleware {
             return try await next(request, body, baseURL)
         }
 
+        // Buffered so the request can be sent twice: an HTTPBody is a stream
+        // and may be single-shot. Every authenticated request this client
+        // makes is a small JSON document; the cap matches StubTransport's.
+        let payload: Data? = if let body {
+            try await Data(collecting: body, upTo: 1 << 20)
+        } else {
+            nil
+        }
+
         var request = request
         request.headerFields[.authorization] = "Bearer \(try await token())"
-        return try await next(request, body, baseURL)
+        let (response, responseBody) = try await next(
+            request, payload.map { HTTPBody($0) }, baseURL
+        )
+        guard response.status == .unauthorized else { return (response, responseBody) }
+
+        // One retry, through a mint that is forced to consult the hub. A
+        // stale access token comes back replaced; a revoked device's mint
+        // throws inside `freshToken()` — and it has already fired the
+        // rejection handler by the time it does. That throw is deliberately
+        // not re-raised from here: `UniversalClient.send` wraps *any* error a
+        // middleware throws in its own `ClientError` before a call site ever
+        // sees it, which is a different type from `HubClient.ClientError` and
+        // would break every `case .unauthorized` handler in `HubClient` that
+        // is written and tested against ours. Falling back to the original
+        // 401 sends the failure through that same already-correct path
+        // instead, and the request is not sent again.
+        guard let fresh = try? await freshToken() else { return (response, responseBody) }
+        request.headerFields[.authorization] = "Bearer \(fresh)"
+        return try await next(request, payload.map { HTTPBody($0) }, baseURL)
     }
 }
 

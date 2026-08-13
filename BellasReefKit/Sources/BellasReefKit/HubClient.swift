@@ -141,7 +141,12 @@ public actor HubClient {
             serverURL: hub.baseURL,
             configuration: Configuration(dateTranscoder: FractionalSecondsDateTranscoder()),
             transport: transport,
-            middlewares: [BearerAuthMiddleware(token: { try await provider.token() })]
+            middlewares: [
+                BearerAuthMiddleware(
+                    token: { try await provider.token() },
+                    freshToken: { try await provider.freshToken() }
+                )
+            ]
         )
         provider.resolve = { [self] in try await accessTokenNow() }
         provider.resolveFresh = { [self] in try await freshAccessTokenNow() }

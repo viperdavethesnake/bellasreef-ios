@@ -200,8 +200,12 @@ struct PairingTests {
 
     // MARK: 401 handling
 
-    @Test("a 401 on an authenticated call drops the cached access token instead of resending it")
+    @Test("a 401 on an authenticated call is retried through a fresh mint, invisibly")
     func staleAccessTokenIsDropped() async throws {
+        // Superseded 2026-08-13: this used to assert the two-interaction bug
+        // itself — the first call throwing and only a second call succeeding.
+        // `BearerAuthMiddleware` now retries once through a forced-fresh mint,
+        // so the caller never sees the 401 at all. See RetryThroughMintTests.
         let log = CallLog()
         let transport = StubTransport { operation, _, _ in
             await log.record(operation)
@@ -209,8 +213,8 @@ struct PairingTests {
             case "mintToken":
                 return (200, json(#"{"access_token":"jwt","expires_in":900}"#))
             case "listClients":
-                // First call is rejected; second would succeed with a fresh
-                // token.
+                // First call is rejected; the middleware's retry succeeds with
+                // a fresh token.
                 return await log.count(of: "listClients") == 1 ? (401, nil) : (200, json("[]"))
             default:
                 return (500, nil)
@@ -220,13 +224,12 @@ struct PairingTests {
             hub: anyHub, tokens: MemoryCredentials(token: "rt"), transport: transport
         )
 
-        await #expect(throws: HubClient.ClientError.self) { _ = try await client.clients() }
         _ = try await client.clients()
 
-        // Without invalidation the cached token is good for another fourteen
-        // minutes by the clock, so the second call would reuse the dead one and
-        // mint exactly once for the whole run.
+        // The stale token is dropped and replaced within the one call: one
+        // retry, one extra mint, no error reaches the caller.
         #expect(await log.count(of: "mintToken") == 2)
+        #expect(await log.count(of: "listClients") == 2)
     }
 
     @Test("clients() returns the rows a revoke screen needs, live ones only")
