@@ -388,6 +388,11 @@ public actor HubClient {
 
     // MARK: Tokens
 
+    /// One mint at a time. The actor suspends across `await mintToken`, so
+    /// without this a second caller finds no cached token and starts a second
+    /// mint — observed live as two `token.minted` audit rows 38 µs apart.
+    private var mintInFlight: Task<String, any Error>?
+
     /// A valid access token, minted if the cached one is missing or stale.
     ///
     /// Refreshed a minute early: a token that expires mid-request is a failure
@@ -397,6 +402,15 @@ public actor HubClient {
            expiry.timeIntervalSinceNow > 60 {
             return token
         }
+        if let inFlight = mintInFlight { return try await inFlight.value }
+
+        let work = Task { try await self.mintFresh() }
+        mintInFlight = work
+        defer { mintInFlight = nil }
+        return try await work.value
+    }
+
+    private func mintFresh() async throws -> String {
         guard let refresh = try tokens.load() else { throw ClientError.unauthorized }
 
         let output = try await client.mintToken(body: .json(.init(refreshToken: refresh)))
