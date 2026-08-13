@@ -72,6 +72,7 @@ struct AdoptDeviceSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
+                        .accessibilityIdentifier("adopt-sheet-cancel-button")
                 }
             }
             .confirmationDialog(
@@ -80,6 +81,11 @@ struct AdoptDeviceSheet: View {
                 titleVisibility: .visible
             ) {
                 Button("Adopt", role: .destructive) { Task { await adopt() } }
+                // confirmationDialog content becomes a UIAlertAction, which
+                // does not carry a custom accessibilityIdentifier (verified
+                // on-device: the identifier is silently dropped), so this
+                // Cancel is distinguished from the toolbar's only by proving
+                // the dialog is gone before anything else touches the sheet.
                 Button("Cancel", role: .cancel) {}
             } message: {
                 Text("Adopting starts real output on this channel as soon as the "

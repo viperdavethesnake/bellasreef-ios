@@ -330,8 +330,37 @@ final class PairingJourneyTests: XCTestCase {
         )
         attach(app, named: "adopt-safety-confirm")
 
+        // Both Cancel buttons share the label "Cancel", but the dialog's own
+        // Cancel turned out to have no reliable container query on-device:
+        // app.sheets.buttons contains only "Adopt" (the Cancel pill is not a
+        // descendant of the XCUIElementTypeSheet card), a custom
+        // accessibilityIdentifier on it is silently dropped (confirmationDialog
+        // content becomes a UIAlertAction, not a real view), and even typed
+        // enumeration (`.buttons.count`, `.matching(identifier:)`) failed to
+        // resolve it at all in repeated on-device runs — apparently a
+        // snapshot-resolution quirk on this simulator/Xcode pairing (surfaced
+        // in xcodebuild's log as "Automation type mismatch: computed Button
+        // from legacy attributes vs Key from modern attribute"). The one thing
+        // that reliably hits it across every run is the original unscoped
+        // `.firstMatch.tap()`, so the fix keeps that but stops inferring
+        // success from it: it now proves the dialog actually closed before
+        // going anywhere near the sheet underneath.
+        let confirmDialog = app.staticTexts["Start real output?"]
         app.buttons["Cancel"].firstMatch.tap()   // the dialog's cancel
-        app.buttons["Cancel"].firstMatch.tap()   // the sheet's cancel
+        XCTAssertTrue(
+            confirmDialog.waitForNonExistence(timeout: 5),
+            "the safety-confirm dialog did not close after Cancel"
+        )
+
+        // The sheet's own Cancel is an ordinary toolbar button with no such
+        // resolution trouble once the dialog above it is gone, and carries
+        // its own identifier so this tap cannot be confused with the one
+        // above it.
+        app.buttons["adopt-sheet-cancel-button"].tap()   // the sheet's cancel
+        XCTAssertTrue(
+            nameField.waitForNonExistence(timeout: 5),
+            "the adopt sheet did not close after Cancel — the cancel path is unproven"
+        )
     }
 
     private func attach(_ app: XCUIApplication, named name: String) {
