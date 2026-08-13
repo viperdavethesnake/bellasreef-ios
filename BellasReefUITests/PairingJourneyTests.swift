@@ -129,9 +129,55 @@ final class PairingJourneyTests: XCTestCase {
                 ).firstMatch.exists,
                 "no expiry countdown beside the code"
             )
+            try approveAndCollectIfTokenProvided(app, code: String(digits), tankTab: tankTab)
         } else {
             XCTAssertTrue(tankTab.exists, "paired but never reached the dashboard")
         }
+    }
+
+    /// The second half of the second-device journey, opt-in.
+    ///
+    /// With `TEST_RUNNER_BELLASREEF_UITEST_APPROVER_TOKEN` set to a live
+    /// client's access token, the test plays the approver: it claims the code
+    /// this device is showing — the byte-identical call AddDeviceView's Approve
+    /// button makes — and then asserts the asking device collects its
+    /// credential and lands on the dashboard with no further touch. Collection
+    /// is the step no test had ever reached: everything before it passed for a
+    /// device that could still never finish pairing.
+    ///
+    /// Without the variable the journey ends at the code screen, exactly as
+    /// before — approving changes hub state, so it stays something a person
+    /// switched on.
+    private func approveAndCollectIfTokenProvided(
+        _ app: XCUIApplication, code: String, tankTab: XCUIElement
+    ) throws {
+        let env = ProcessInfo.processInfo.environment
+        guard let token = env["BELLASREEF_UITEST_APPROVER_TOKEN"], !token.isEmpty else {
+            return
+        }
+        let hub = env["BELLASREEF_UITEST_HUB_URL"] ?? "http://bellasreef.local:8000"
+
+        var request = URLRequest(url: URL(string: "\(hub)/api/v1/pair/claim")!)
+        request.httpMethod = "POST"
+        request.addValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.addValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try JSONSerialization.data(withJSONObject: ["code": code])
+
+        var claimStatus = -1
+        let claimed = expectation(description: "claim answered")
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            claimStatus = (response as? HTTPURLResponse)?.statusCode ?? -1
+            claimed.fulfill()
+        }.resume()
+        wait(for: [claimed], timeout: 15)
+        XCTAssertEqual(claimStatus, 200, "claiming the on-screen code failed")
+
+        XCTAssertTrue(
+            tankTab.waitForExistence(timeout: 30),
+            "approved, but this device never collected its credential and reached "
+            + "the dashboard — the poll/collect half of the journey is broken"
+        )
+        attach(app, named: "second-device-landed")
     }
 
     // MARK: - The dashboard
