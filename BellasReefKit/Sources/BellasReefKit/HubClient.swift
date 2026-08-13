@@ -98,6 +98,21 @@ public actor HubClient {
     private let client: Client
     private let tokens: any CredentialStore
 
+    /// Fired when the hub *proves* this device's credential dead: `mintToken`
+    /// rejected the refresh token. A 401 on any other call is not proof — that
+    /// only means the access token went stale, and the next mint decides.
+    ///
+    /// This is the REST twin of `TankMonitor.onCredentialRejected`, and it
+    /// exists because the monitor's copy turned out to be unreachable on a
+    /// revoked device: its stream, authenticated at handshake, stays up, so
+    /// the only wiring to the pairing screen ran through a reconnect that
+    /// never happened — while every REST call failed as an inline error.
+    private var credentialRejectedHandler: (@Sendable () -> Void)?
+
+    public func notifyCredentialRejected(_ handler: @escaping @Sendable () -> Void) {
+        credentialRejectedHandler = handler
+    }
+
     private let tokenProvider: TokenProvider
 
     private var accessToken: String?
@@ -395,6 +410,7 @@ public actor HubClient {
             // Revoked, or the hub was rebuilt. Forget the credential rather
             // than retrying against something that will never accept it.
             try? tokens.clear()
+            credentialRejectedHandler?()
             throw credentialWasRejected()
         case let .undocumented(statusCode, _):
             throw ClientError.unexpected("token returned \(statusCode)")

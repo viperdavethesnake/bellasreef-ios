@@ -81,6 +81,16 @@ final class AppModel {
 
     func adopt(_ client: HubClient, hub: Hub) {
         self.client = client
+        // Registered from a Task because HubClient is an actor and this method
+        // is not async; the handoff completes before any REST call could mint
+        // a token. Both halves are wired to the same landing: the monitor hears
+        // a rejection on stream reconnect, the client hears the one that
+        // actually happens on a revoked device — a REST call forcing a mint.
+        Task {
+            await client.notifyCredentialRejected { [weak self] in
+                Task { @MainActor in self?.credentialRejected() }
+            }
+        }
         let monitor = TankMonitor(client: client, stream: StreamClient(baseURL: hub.baseURL))
         monitor.onCredentialRejected = { [weak self] in self?.credentialRejected() }
         self.monitor = monitor
