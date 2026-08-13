@@ -194,6 +194,72 @@ public actor HubClient {
         }
     }
 
+    // MARK: Capabilities and adoption
+
+    /// What the hardware can offer, and what has been claimed. Tier one of
+    /// the registry: nothing here is a device until an operator binds it.
+    public func capabilities() async throws -> [Components.Schemas.CapabilityView] {
+        switch try await client.listCapabilities() {
+        case let .ok(response): return try response.body.json
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the capabilities query")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("capabilities returned \(statusCode)")
+        }
+    }
+
+    /// Every documented ending of `POST /api/v1/devices`. Distinct cases
+    /// because each needs different words and a different way out — the 409
+    /// in particular means the list on screen is stale, not that the operator
+    /// did anything wrong.
+    public enum BindOutcome: Sendable, Equatable {
+        /// 200. `created: false` is match-before-create: the channel already
+        /// carried a device, which was adopted in place under its own id.
+        case bound(deviceId: String, created: Bool)
+        /// 404 — the channel is no longer announced.
+        case channelGone
+        /// 409 — another device claimed the channel since the list loaded.
+        case alreadyBound
+        /// 422 — the role is not legal for this device.
+        case roleNotLegal
+    }
+
+    public func bind(
+        _ request: Components.Schemas.BindDeviceRequest
+    ) async throws -> BindOutcome {
+        switch try await client.bindDevice(body: .json(request)) {
+        case let .ok(response):
+            let bound = try response.body.json
+            return .bound(deviceId: bound.deviceId, created: bound.created)
+        case .notFound: return .channelGone
+        case .conflict: return .alreadyBound
+        case .unprocessableContent: return .roleNotLegal
+        case .unauthorized: throw credentialWasRejected()
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("bind returned \(statusCode)")
+        }
+    }
+
+    /// Every documented ending of `DELETE /api/v1/devices/{device_id}`.
+    public enum UnbindOutcome: Sendable, Equatable {
+        case unbound
+        /// 404 — unknown, or already unbound. Either way the channel is free.
+        case alreadyUnbound
+    }
+
+    public func unbind(deviceId: String) async throws -> UnbindOutcome {
+        switch try await client.unbindDevice(path: .init(deviceId: deviceId)) {
+        case .noContent: return .unbound
+        case .notFound: return .alreadyUnbound
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the device id")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("unbind returned \(statusCode)")
+        }
+    }
+
     /// Name a device, or pass `nil` to go back to the raw id.
     public func rename(deviceId: String, to name: String?) async throws {
         switch try await client.renameDevice(
