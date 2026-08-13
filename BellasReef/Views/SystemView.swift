@@ -341,7 +341,7 @@ struct SystemView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(capability.source.rawValue) · channel \(capability.channel)")
                     .foregroundStyle(Theme.primaryText)
-                Text("announced, not adopted")
+                Text(availableSubtitle(capability))
                     .font(Theme.caption)
                     .foregroundStyle(Theme.tertiaryText)
             }
@@ -350,6 +350,31 @@ struct SystemView: View {
                 .foregroundStyle(Theme.accent)
         }
         .frame(minHeight: 44)
+    }
+
+    /// The operator's only physical-identity cue before adopting a channel
+    /// that will emit real output — e.g. an I2C address or a GPIO number.
+    /// `detail` is a free-form, hub-declared container (generated as
+    /// `OpenAPIRuntime.OpenAPIObjectContainer`, whose `.value` is
+    /// `[String: (any Sendable)?]` — verified against the runtime source,
+    /// not guessed). Only flat scalar values are shown; a nested array or
+    /// object is skipped rather than rendered as a debug dump. Sorted by key
+    /// so the same capability reads the same way on every refresh.
+    private func availableSubtitle(_ capability: Components.Schemas.CapabilityView) -> String {
+        let flat = capability.detail.additionalProperties.value
+            .compactMap { key, value -> (String, String)? in
+                switch value {
+                case let value as String: return (key, value)
+                case let value as Int: return (key, String(value))
+                case let value as Double: return (key, String(value))
+                case let value as Bool: return (key, String(value))
+                default: return nil
+                }
+            }
+            .sorted { $0.0 < $1.0 }
+            .map { "\($0.0) \($0.1)" }
+            .joined(separator: " · ")
+        return flat.isEmpty ? "announced, not adopted" : "\(flat) · announced, not adopted"
     }
 
     /// True when this is the only client the hub still trusts — or when the
@@ -388,7 +413,10 @@ struct SystemView: View {
     }
 
     private func loadHardware() async {
-        guard let client = model.client else { return }
+        guard let client = model.client else {
+            hardwareFailed = true
+            return
+        }
         do {
             async let caps = client.capabilities()
             async let devs = client.devices()
