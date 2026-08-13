@@ -277,7 +277,7 @@ struct SystemView: View {
                     Text("Available channels")
                         .font(Theme.caption)
                         .foregroundStyle(Theme.tertiaryText)
-                    ForEach(free, id: \.channel) { capability in
+                    ForEach(free) { capability in
                         Button { adopting = capability } label: {
                             availableRow(capability)
                         }
