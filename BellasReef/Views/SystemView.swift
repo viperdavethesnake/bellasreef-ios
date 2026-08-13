@@ -20,6 +20,12 @@ struct SystemView: View {
     /// device found the hub — Bonjour, a typed address, or a restored pairing.
     @State private var hubName: String?
     @State private var hubNameFailed = false
+    @State private var capabilities: [Components.Schemas.CapabilityView]?
+    @State private var hardwareDevices: [Components.Schemas.DeviceView]?
+    @State private var hardwareFailed = false
+    @State private var adopting: Components.Schemas.CapabilityView?
+    @State private var unadopting: Components.Schemas.DeviceView?
+    @State private var unadoptProblem: String?
 
     var body: some View {
         @Bindable var preferences = preferences
@@ -44,6 +50,8 @@ struct SystemView: View {
                 }
 
                 pairedDevices
+
+                hardware
 
                 Section {
                     Picker("Temperature", selection: $preferences.temperatureUnit) {
@@ -100,6 +108,30 @@ struct SystemView: View {
             .refreshable { await loadEverything() }
             .sheet(isPresented: $addingDevice) {
                 AddDeviceView(onApproved: { Task { await loadClients() } })
+            }
+            .sheet(item: $adopting) { capability in
+                AdoptDeviceSheet(capability: capability) {
+                    Task { await loadHardware() }
+                }
+            }
+            .confirmationDialog(
+                "Unadopt this device?",
+                isPresented: Binding(
+                    get: { unadopting != nil },
+                    set: { if !$0 { unadopting = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: unadopting
+            ) { device in
+                Button("Unadopt \(device.displayName ?? device.deviceId)",
+                       role: .destructive) {
+                    Task { await unadopt(device) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("The engine stops commanding this channel and it returns to "
+                     + "its safe state. History is kept — adopting the same "
+                     + "hardware again reattaches it.")
             }
             // Same treatment as sign-out: nothing destructive on a single tap,
             // and the dialog names the device rather than saying "this one".
@@ -226,6 +258,100 @@ struct SystemView: View {
         return "last seen \(RelativeAge.describe(from: seen))"
     }
 
+    /// Inventory and lifecycle only — controls live on the function tabs
+    /// (design ruling 2026-08-13: System is never a junk drawer).
+    @ViewBuilder
+    private var hardware: some View {
+        Section {
+            if let hardwareDevices, let capabilities {
+                ForEach(hardwareDevices, id: \.deviceId) { device in
+                    adoptedRow(device)
+                }
+                let free = capabilities.filter { $0.boundTo == nil }
+                if free.isEmpty && hardwareDevices.isEmpty {
+                    Text("The hub has not announced any hardware.")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.tertiaryText)
+                }
+                if !free.isEmpty {
+                    Text("Available channels")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.tertiaryText)
+                    ForEach(free, id: \.channel) { capability in
+                        Button { adopting = capability } label: {
+                            availableRow(capability)
+                        }
+                        .accessibilityIdentifier("hardware-available-channel")
+                    }
+                }
+                if hardwareFailed {
+                    Text("Could not refresh this list — it may be out of date.")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.attention)
+                }
+            } else if hardwareFailed {
+                Text("Could not ask the hub what hardware it has.")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.tertiaryText)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+
+            if let unadoptProblem {
+                Label(unadoptProblem, systemImage: "exclamationmark.triangle.fill")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.attention)
+            }
+        } header: {
+            Text("Hardware")
+        } footer: {
+            Text("Adopting a channel makes it a device the engine may command. "
+                 + "Controls live on the tab that uses the device; this list is "
+                 + "the inventory.")
+        }
+    }
+
+    @ViewBuilder
+    private func adoptedRow(_ device: Components.Schemas.DeviceView) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(device.displayName ?? device.deviceId)
+                    .foregroundStyle(Theme.primaryText)
+                Text(deviceSubtitle(device))
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.tertiaryText)
+            }
+            Spacer()
+            Button("Unadopt", role: .destructive) { unadopting = device }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("unadopt-\(device.deviceId)")
+        }
+        .frame(minHeight: 44)
+    }
+
+    private func deviceSubtitle(_ device: Components.Schemas.DeviceView) -> String {
+        var parts = [device.driverId]
+        if let role = device.role { parts.append(role) }
+        return parts.joined(separator: " · ")
+    }
+
+    @ViewBuilder
+    private func availableRow(_ capability: Components.Schemas.CapabilityView) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("\(capability.source.rawValue) · channel \(capability.channel)")
+                    .foregroundStyle(Theme.primaryText)
+                Text("announced, not adopted")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.tertiaryText)
+            }
+            Spacer()
+            Image(systemName: "plus.circle")
+                .foregroundStyle(Theme.accent)
+        }
+        .frame(minHeight: 44)
+    }
+
     /// True when this is the only client the hub still trusts — or when the
     /// list could not be fetched, because an unknown count must not produce the
     /// reassuring copy. Defaulting to "not last" is what would tell a genuinely
@@ -238,9 +364,10 @@ struct SystemView: View {
     private var countKnown: Bool { clients != nil }
 
     private func loadEverything() async {
-        // Two independent round trips to a Pi over WiFi; neither needs the
-        // other's answer, so neither waits for it.
+        // Three independent round trips to a Pi over WiFi; none needs
+        // another's answer, so none waits for it.
         async let devices: Void = loadClients()
+        async let hardware: Void = loadHardware()
         do {
             hubName = try await model.client?.info().name
             hubNameFailed = false
@@ -248,6 +375,7 @@ struct SystemView: View {
             hubNameFailed = true
         }
         await devices
+        await hardware
     }
 
     private func loadClients() async {
@@ -256,6 +384,19 @@ struct SystemView: View {
             clientsFailed = false
         } else {
             clientsFailed = true
+        }
+    }
+
+    private func loadHardware() async {
+        guard let client = model.client else { return }
+        do {
+            async let caps = client.capabilities()
+            async let devs = client.devices()
+            capabilities = try await caps
+            hardwareDevices = try await devs
+            hardwareFailed = false
+        } catch {
+            hardwareFailed = true
         }
     }
 
@@ -269,6 +410,16 @@ struct SystemView: View {
         await loadClients()
     }
 
+    private func unadopt(_ device: Components.Schemas.DeviceView) async {
+        unadoptProblem = nil
+        do {
+            _ = try await model.client?.unbind(deviceId: device.deviceId)
+        } catch {
+            unadoptProblem = "\(error)"
+        }
+        await loadHardware()
+    }
+
     /// Says what `automatic` actually resolves to on *this* device, rather than
     /// leaving the operator to discover it by switching and watching.
     private var automaticExplanation: String {
@@ -277,4 +428,8 @@ struct SystemView: View {
         return "Automatic follows your region, which here means \(name). "
             + "The hub always records Celsius; this only changes what you see."
     }
+}
+
+extension Components.Schemas.CapabilityView: @retroactive Identifiable {
+    public var id: String { "\(source.rawValue):\(channel)" }
 }
