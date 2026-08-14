@@ -11,6 +11,16 @@ private let anyHub = Hub(
 
 private func json(_ text: String) -> Data { Data(text.utf8) }
 
+/// Captures the last request body a `StubTransport` handler saw, matching the
+/// lock-protected-box idiom used elsewhere in this test target rather than
+/// inventing a second one.
+private final class CapturedBody: @unchecked Sendable {
+    private let lock = NSLock()
+    private var data: Data?
+    func store(_ value: Data) { lock.withLock { data = value } }
+    var value: Data? { lock.withLock { data } }
+}
+
 /// Stub bodies for the adoption endpoints. Wire format is snake_case.
 private let oneFreeChannel = #"""
 [{"source": "pca9685", "channel": "0",
@@ -73,6 +83,37 @@ struct AdoptionTests {
             )
             #expect(outcome == expected, "status \(status)")
         }
+    }
+
+    /// Live-found 2026-08-13: a sensor adopt omitted `poll_interval_s` and the
+    /// hub 422'd it ("a sensor must declare poll_interval_s"). The field has
+    /// been in the generated `BindDeviceRequest` since it first grew a
+    /// contract — this proves the client actually puts it on the wire, in the
+    /// hub's snake_case, once the caller supplies one.
+    @Test("a ds18b20 bind carries poll_interval_s on the wire")
+    func bindSendsPollIntervalForASensor() async throws {
+        let captured = CapturedBody()
+        let client = HubClient(
+            hub: anyHub, tokens: MemoryCredentials(token: "refresh"),
+            transport: StubTransport { operation, _, body in
+                if operation == "mintToken" {
+                    return (200, json(#"{"access_token":"jwt","expires_in":900}"#))
+                }
+                #expect(operation == "bindDevice")
+                captured.store(body)
+                return (200, json(#"""
+                    {"device_id": "ds18b20-28-000000bfe244", "created": true,
+                     "driver_type": "ds18b20", "channel": "28-000000bfe244"}
+                    """#))
+            }
+        )
+        _ = try await client.bind(
+            .init(channel: "28-000000bfe244", deviceId: "ds18b20-28-000000bfe244",
+                  displayName: "Temperature probe", driverType: .ds18b20, pollIntervalS: 5)
+        )
+        let body = try #require(captured.value)
+        let parsed = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
+        #expect(parsed["poll_interval_s"] as? Double == 5)
     }
 
     @Test("unbind distinguishes done from already-done")

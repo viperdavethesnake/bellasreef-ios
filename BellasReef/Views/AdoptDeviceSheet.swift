@@ -16,6 +16,7 @@ struct AdoptDeviceSheet: View {
     let onAdopted: () -> Void
 
     @State private var name: String
+    @State private var pollIntervalText: String
     @State private var confirming = false
     @State private var working = false
     @State private var problem: String?
@@ -24,11 +25,23 @@ struct AdoptDeviceSheet: View {
         self.capability = capability
         self.onAdopted = onAdopted
         _name = State(initialValue: Self.seedName(for: capability))
+        _pollIntervalText = State(initialValue: "5")
     }
 
     /// Actuator sources get the safety confirm; a probe read has no failure
     /// mode worth the friction.
     private var isActuator: Bool { capability.source.rawValue != "w1-bus" }
+
+    /// The hub 422s a sensor bind with no `poll_interval_s` — "a sensor must
+    /// declare poll_interval_s" — so a sensor adopt needs a cadence from the
+    /// operator. Actuators never poll and always send nil.
+    private var pollIntervalSeconds: Int? { Int(pollIntervalText.trimmingCharacters(in: .whitespaces)) }
+
+    private var pollIntervalValid: Bool {
+        guard !isActuator else { return true }
+        guard let seconds = pollIntervalSeconds else { return false }
+        return seconds > 0
+    }
 
     var body: some View {
         NavigationStack {
@@ -49,6 +62,10 @@ struct AdoptDeviceSheet: View {
                             Text("Light").tag("light")
                         }
                         .disabled(true)
+                    } else {
+                        TextField("Poll every N seconds", text: $pollIntervalText)
+                            .keyboardType(.numberPad)
+                            .accessibilityIdentifier("adopt-poll-interval-field")
                     }
                 }
                 Section {
@@ -58,7 +75,11 @@ struct AdoptDeviceSheet: View {
                         if working { ProgressView() } else { Text("Adopt") }
                     }
                     .frame(minHeight: 44)
-                    .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || working)
+                    .disabled(
+                        name.trimmingCharacters(in: .whitespaces).isEmpty
+                            || working
+                            || !pollIntervalValid
+                    )
                     .accessibilityIdentifier("adopt-confirm-button")
 
                     if let problem {
@@ -119,14 +140,17 @@ struct AdoptDeviceSheet: View {
             // BindDeviceRequest's memberwise init parameter order is
             // alphabetical (generated, verified against Types.swift):
             // channel, deviceId, displayName, driverType, location,
-            // pollIntervalS, role. `location` and `pollIntervalS` are
-            // omitted here and default to nil.
+            // pollIntervalS, role. `location` is omitted here and defaults
+            // to nil. `pollIntervalS` is nil for an actuator (it never
+            // polls) and the operator's validated cadence for a sensor —
+            // the hub 422s a sensor bind without it.
             let outcome = try await model.client?.bind(
                 .init(
                     channel: capability.channel,
                     deviceId: proposed,
                     displayName: name.trimmingCharacters(in: .whitespaces),
                     driverType: driverType,
+                    pollIntervalS: isActuator ? nil : pollIntervalSeconds.map(Double.init),
                     role: isActuator ? .light : nil
                 )
             )
