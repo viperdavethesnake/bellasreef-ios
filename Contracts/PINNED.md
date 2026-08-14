@@ -6,11 +6,11 @@ reviewable diff rather than something that shifts under the app.
 
 | | |
 |---|---|
-| Backend commit | `6567638` |
-| CI run | exported locally from `6567638`; re-pin from the artifact once that run is green |
-| Pinned on | 2026-08-12 |
+| Backend commit | `da1f36c` |
+| CI run | exported locally from `da1f36c`'s committed `openapi.json`; re-pin from the artifact once that run is green |
+| Pinned on | 2026-08-13 |
 | OpenAPI | 3.1.0, 21 paths |
-| Contracts version | 3.5.0 |
+| Contracts version | 3.6.0 |
 | Frame schema | v1 |
 
 ## Refreshing
@@ -42,3 +42,12 @@ CI's "Contracts are in sync" step compares the two copies in *this* repo, which
 catches a hand-edit and cannot catch this. The backend gained a CI step that
 diffs its generated spec against its committed one; keeping these files current
 still means running `pin-contracts.sh` after a backend contract change.
+
+## What 3.5.0 → 3.6.0 added
+
+`DeviceView` gained an optional `channel` (string, nullable): the binding's
+physical channel (a PWM channel number or a 1-Wire ROM), `None` once the
+device's binding is released. Additive and non-breaking — the generator's
+`DeviceView` struct grows one more optional property, nothing else in the spec
+moved. Lets an adopted-device row show which physical channel it claims,
+matching the available-channel rows, which already showed it.
