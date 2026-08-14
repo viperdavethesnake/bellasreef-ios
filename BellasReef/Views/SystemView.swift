@@ -329,8 +329,15 @@ struct SystemView: View {
         .frame(minHeight: 44)
     }
 
+    /// Matches the available-channel rows' voice (`"channel \(capability.channel)"`)
+    /// while staying compact for an already-adopted row: a numeric PWM channel
+    /// reads as `ch 0`, a 1-Wire ROM (not a number) is shown bare rather than
+    /// as `ch 28-000000bfe244`.
     private func deviceSubtitle(_ device: Components.Schemas.DeviceView) -> String {
         var parts = [device.driverId]
+        if let channel = device.channel {
+            parts.append(Int(channel) != nil ? "ch \(channel)" : channel)
+        }
         if let role = device.role { parts.append(role) }
         return parts.joined(separator: " · ")
     }
