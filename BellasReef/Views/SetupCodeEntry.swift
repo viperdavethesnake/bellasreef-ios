@@ -1,7 +1,10 @@
 // Bella's Reef iOS — closed source.
 
 import BellasReefKit
+import OSLog
 import SwiftUI
+
+private let log = Logger(subsystem: "com.bellasreef.app", category: "setup-code")
 
 /// Feature 2 of the 2026-08-15 new-owner-experience spec: the screen a hub
 /// in setup mode shows in place of the request-and-wait flow.
@@ -17,6 +20,13 @@ import SwiftUI
 /// 429 body isn't parsed either.
 struct SetupCodeEntry: View {
     let client: HubClient
+    /// Fired at the top of every submit, before the request goes out — the
+    /// same place `HubIdentifyCard.pair()` clears its own `problem` at
+    /// PairingFlow.swift:379. This screen owns its four §7.1 states, but
+    /// `problem` is the caller's catch-all slot (see `onError` below), and a
+    /// stale sentence from a previous unrelated failure must not sit under a
+    /// fresh submit that has said nothing wrong yet.
+    let onSubmitStarted: () -> Void
     let onGranted: (String, String) async -> Void
     /// The "I don't have a code" fire escape's own race window: another
     /// device can finish pairing — via its own window, approval, or code —
@@ -164,6 +174,7 @@ struct SetupCodeEntry: View {
     }
 
     private func submit() async {
+        onSubmitStarted()
         state = .submitting
         let name = clientName.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
@@ -183,8 +194,9 @@ struct SetupCodeEntry: View {
                 onError("the hub returned an unexpected pairing outcome")
             }
         } catch {
+            log.error("setup-code submit failed: \(String(describing: error))")
             state = .idle
-            onError("\(error)")
+            onError(HumanError.describe(error))
         }
     }
 
@@ -207,6 +219,7 @@ struct SetupCodeEntry: View {
     /// code. Every reachable outcome here has to leave a coherent state,
     /// not just the ones true at the moment the screen opened.
     private func submitWithoutCode() async {
+        onSubmitStarted()
         state = .submitting
         let name = clientName.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
@@ -249,8 +262,9 @@ struct SetupCodeEntry: View {
             // already made for `.codeRejected` above.
             state = .noCodeRejected
         } catch {
+            log.error("setup-code fire-escape submit failed: \(String(describing: error))")
             state = .idle
-            onError("\(error)")
+            onError(HumanError.describe(error))
         }
     }
 }
