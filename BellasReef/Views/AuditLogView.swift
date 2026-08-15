@@ -95,14 +95,11 @@ struct AuditLogView: View {
                 .padding(.vertical, 3)
                 .background(Capsule().fill(Theme.surfaceRaised))
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(event.actor) · \(event.subject)")
+                Text(AuditPhrase.title(
+                    action: event.action,
+                    deviceName: event.deviceId.map { model.catalog?.name(for: $0) ?? $0 }))
                     .foregroundStyle(Theme.primaryText)
-                if let deviceId = event.deviceId {
-                    Text(model.catalog?.name(for: deviceId) ?? deviceId)
-                        .font(Theme.caption)
-                        .foregroundStyle(Theme.tertiaryText)
-                }
-                Text(RelativeAge.describe(from: event.occurredAt))
+                Text("\(event.actor) · \(RelativeAge.describe(from: event.occurredAt))")
                     .font(Theme.caption)
                     .foregroundStyle(Theme.tertiaryText)
             }
