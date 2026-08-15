@@ -18,6 +18,15 @@ import SwiftUI
 struct SetupCodeEntry: View {
     let client: HubClient
     let onGranted: (String, String) async -> Void
+    /// The "I don't have a code" fire escape's own race window: another
+    /// device can finish pairing — via its own window, approval, or code —
+    /// between this screen appearing and this submit landing, which both
+    /// ends setup mode and makes a code-less `pair()` from here return a
+    /// real 202 with a real approval code and a real expiry, exactly like
+    /// the plain flow's own pending path. The caller lands this on the same
+    /// `PendingApproval` screen the plain flow uses; this view has no
+    /// waiting UI of its own to spend it on.
+    let onPending: (HubClient.PendingPairing) async -> Void
     /// A 422 can mean the code was spent pairing a different device between
     /// this screen appearing and this submit landing. Re-fetching `/info`
     /// catches that: `setup_mode` flips false and the caller's `action(_:)`
@@ -188,9 +197,15 @@ struct SetupCodeEntry: View {
     /// operator who opened one on the hub is not stuck behind a code they
     /// never received. With no window open, setup mode with no code ever
     /// minted still grants by blind TOFU — first client in, same as always.
-    /// Only "a code exists and no window is open" comes back 422, which
-    /// reads as "the code path is the only path right now" rather than as a
-    /// wrong code, because this call sends none.
+    /// "A code exists and no window is open" comes back 422, read as "the
+    /// code path is the only path right now" rather than as a wrong code,
+    /// because this call sends none. And — the gap the 2026-08-15 round-2
+    /// review caught — setup mode can end *between* this screen appearing
+    /// and this submit landing (another device pairing by any path), which
+    /// turns a code-less call into a genuine `.pending`: someone is now
+    /// alive to approve, and the hub queues a real request with a real
+    /// code. Every reachable outcome here has to leave a coherent state,
+    /// not just the ones true at the moment the screen opened.
     private func submitWithoutCode() async {
         state = .submitting
         let name = clientName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -198,16 +213,33 @@ struct SetupCodeEntry: View {
             switch try await client.pair(clientName: name) {
             case let .granted(refreshToken, clientId):
                 await onGranted(refreshToken, clientId)
-            case .pending, .needsRecoveryCLI, .codeRejected, .throttled:
-                // Unreachable while setup_mode is true: setup mode means no
-                // client has ever paired, so a code-less call here resolves
-                // via the window or blind-TOFU path — granted or 422, never
-                // queued, fire-escaped, or code-throttled (those last two
-                // are only returned when this call carries a setupCode, and
-                // this one never does).
+            case let .pending(pending):
+                // Setup mode ended mid-screen; this is now a real approval
+                // request. Hand it to the same landing the plain flow's
+                // `.pending` uses, and refresh `/info` so `action(_:)` stops
+                // routing back here on the next render.
+                await onPending(pending)
+                await onSetupModeEnded()
+            case .needsRecoveryCLI:
+                // Reachable only if setup mode ended AND every client that
+                // caused it to end is now revoked — a narrow enough race
+                // that there is nothing more specific to say than the
+                // generic problem display.
+                state = .idle
+                onError("the hub returned an unexpected pairing outcome")
+            case .codeRejected, .throttled:
+                // Genuinely unreachable: both are only returned when this
+                // call carries a `setupCode`, and this one never does.
                 state = .idle
                 onError("the hub returned an unexpected pairing outcome")
             }
+        } catch HubClient.ClientError.throttled {
+            // 429: distinct from `.rejected` precisely so this catch does
+            // not have to inspect the reason string to tell a throttle
+            // apart from a flat refusal (review ruling, 2026-08-15, round
+            // 2: this used to fall into `.rejected` below and show the
+            // wrong copy).
+            state = .throttled
         } catch HubClient.ClientError.rejected {
             // Almost always the 422: no window open, and a code has already
             // been minted. `.rejected` also covers losing a 409 window race

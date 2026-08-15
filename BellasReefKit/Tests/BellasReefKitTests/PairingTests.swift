@@ -117,13 +117,18 @@ struct PairingTests {
 
     // MARK: Setup-code pairing (3.7.0)
 
-    @Test("a 422 on the plain flow still names the name, unchanged")
+    @Test("a 422 on the plain flow still throws .rejected, unchanged")
     func plainFlowRejectionUnchanged() async {
         let transport = StubTransport { _, _, _ in (422, nil) }
         let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
 
-        await #expect(throws: HubClient.ClientError.self) {
+        do {
             _ = try await client.pair(clientName: "iPad")
+            Issue.record("a 422 without a setup code should throw")
+        } catch HubClient.ClientError.rejected {
+            // expected — the plain flow's name-rejection copy still lives here.
+        } catch {
+            Issue.record("expected .rejected, got \(error)")
         }
     }
 
@@ -183,13 +188,22 @@ struct PairingTests {
         #expect(await log.count(of: "pair") == 1)
     }
 
-    @Test("a 429 on a code-less call is thrown, symmetric with the 422 arm above it")
-    func plainFlowThrottleUnchanged() async {
+    @Test("a 429 on a code-less call throws the distinct .throttled case, not .rejected")
+    func plainFlowThrottleIsDistinct() async {
+        // Distinct on purpose: a caller that also makes code-less calls (the
+        // setup screen's own "I don't have a code" fire escape) needs to
+        // tell a throttle apart from a flat refusal without inspecting the
+        // reason string, which reads identically either way.
         let transport = StubTransport { _, _, _ in (429, nil) }
         let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
 
-        await #expect(throws: HubClient.ClientError.self) {
+        do {
             _ = try await client.pair(clientName: "iPad")
+            Issue.record("a 429 without a setup code should throw")
+        } catch HubClient.ClientError.throttled {
+            // expected
+        } catch {
+            Issue.record("expected .throttled, got \(error)")
         }
     }
 

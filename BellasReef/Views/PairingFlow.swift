@@ -231,6 +231,19 @@ struct HubIdentifyCard: View {
                 onGranted: { refreshToken, clientId in
                     await complete(refreshToken: refreshToken, clientId: clientId, using: client)
                 },
+                // A race, not a hypothetical: another device can finish
+                // pairing — via its own window, approval, or code — while
+                // this screen is open, which both ends setup mode and makes
+                // a code-less pair() from here return a real 202 with a
+                // real code and a real expiry. Lands in the same
+                // `PendingApproval` the plain flow uses; `refreshInfo()`
+                // moves `info.setupMode` off stale so `action(_:)` actually
+                // falls through to the `pending` branch below on the next
+                // render instead of re-showing this one.
+                onPending: { newPending in
+                    self.pending = newPending
+                    await refreshInfo()
+                },
                 onSetupModeEnded: { await refreshInfo() },
                 onError: { problem = $0 }
             )

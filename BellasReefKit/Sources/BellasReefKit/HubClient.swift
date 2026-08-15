@@ -90,6 +90,13 @@ public actor HubClient {
         /// The hub understood the request and refused it, with a reason worth
         /// showing verbatim.
         case rejected(String)
+        /// Too many failed setup-code attempts, globally throttled. 429 on a
+        /// call that carried no `setupCode` — kept out of `.rejected` so a
+        /// caller can tell "wait and try again" apart from a flat refusal
+        /// without inspecting the string (review ruling, 2026-08-15, round
+        /// 2: `submitWithoutCode()` used to catch both as `.rejected` and
+        /// show the wrong copy for a throttle).
+        case throttled(String)
         /// The Keychain could not hold a credential. Raised *before* pairing,
         /// so nothing has been spent when the operator sees it.
         case credentialStoreUnusable(String)
@@ -99,6 +106,7 @@ public actor HubClient {
             case let .unexpected(detail): detail
             case .unauthorized: "the hub rejected this credential"
             case let .rejected(reason): reason
+            case let .throttled(reason): reason
             case let .credentialStoreUnusable(detail):
                 "this device cannot store a credential — \(detail)"
             }
@@ -519,12 +527,15 @@ public actor HubClient {
             // "should" is not "is", and a code-less 429 must not silently
             // become an outcome case the plain flow's exhaustive switch has
             // no honest handling for. Symmetric with the 422 arm just
-            // above: thrown for the code-less caller (unchanged from before
-            // setup codes existed), returned as an outcome only when this
-            // call carried a `setupCode`, so the setup-code screen can show
-            // its own copy instead of a reason the contract never sends.
+            // above: thrown for the code-less caller, returned as an
+            // outcome only when this call carried a `setupCode`. Thrown as
+            // `.throttled`, not `.rejected` — a caller that also sends
+            // code-less calls (the setup screen's own fire escape) needs to
+            // tell a throttle apart from a flat refusal without parsing the
+            // reason string, and `.rejected` and `.throttled` render the
+            // same word-for-word text either way.
             guard setupCode != nil else {
-                throw ClientError.rejected("too many failed setup-code attempts — wait and try again")
+                throw ClientError.throttled("too many failed setup-code attempts — wait and try again")
             }
             return .throttled
         case let .undocumented(statusCode, _):
