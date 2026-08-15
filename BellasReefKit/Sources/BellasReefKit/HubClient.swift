@@ -280,6 +280,62 @@ public actor HubClient {
         }
     }
 
+    /// Every documented ending of `POST /api/v1/devices/{device_id}/readopt`.
+    ///
+    /// The Detached section's "Re-add" (ruled 2026-08-15): `unbind` keeps the
+    /// row and its binding on purpose, and this is what makes that worth
+    /// doing rather than merely quiet — the operator gets the *same* device
+    /// back, name and history intact, instead of re-binding through `bind`
+    /// and hoping the proposed id is the one that lands.
+    public enum ReadoptOutcome: Sendable, Equatable {
+        /// 200 — reattached, with its old name, thresholds and history.
+        case readopted(Components.Schemas.DeviceView)
+        /// 404 — unknown, or not detached.
+        case notDetached
+        /// 409 — its channel is now held by another adopted device.
+        case channelHeld
+    }
+
+    public func readopt(deviceId: String) async throws -> ReadoptOutcome {
+        switch try await client.readoptDevice(path: .init(deviceId: deviceId)) {
+        case let .ok(response): return .readopted(try response.body.json)
+        case .notFound: return .notDetached
+        case .conflict: return .channelHeld
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the device id")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("readopt returned \(statusCode)")
+        }
+    }
+
+    /// Every documented ending of `POST /api/v1/devices/{device_id}/forget`.
+    ///
+    /// The Detached section's "Clear" — deleting a detached row for good.
+    /// Distinct from the parameterless `forget()` below, which clears this
+    /// device's own stored credential; this one asks the hub to delete
+    /// someone else's device row.
+    public enum ForgetDeviceOutcome: Sendable, Equatable {
+        case forgotten
+        /// 404 — unknown.
+        case unknown
+        /// 409 — still adopted; unbind it first.
+        case stillAdopted
+    }
+
+    public func forget(deviceId: String) async throws -> ForgetDeviceOutcome {
+        switch try await client.forgetDevice(path: .init(deviceId: deviceId)) {
+        case .noContent: return .forgotten
+        case .notFound: return .unknown
+        case .conflict: return .stillAdopted
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the device id")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("forget returned \(statusCode)")
+        }
+    }
+
     /// Name a device, or pass `nil` to go back to the raw id.
     public func rename(deviceId: String, to name: String?) async throws {
         switch try await client.renameDevice(

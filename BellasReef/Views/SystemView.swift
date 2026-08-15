@@ -28,6 +28,7 @@ struct SystemView: View {
     @State private var hardwareFailed = false
     @State private var adopting: Components.Schemas.CapabilityView?
     @State private var unadopting: Components.Schemas.DeviceView?
+    @State private var forgetting: Components.Schemas.DeviceView?
     @State private var unadoptProblem: String?
 
     var body: some View {
@@ -148,6 +149,25 @@ struct SystemView: View {
                 Text("The engine stops commanding this channel and it returns to "
                      + "its safe state. History is kept — adopting the same "
                      + "hardware again reattaches it.")
+            }
+            .confirmationDialog(
+                "Clear this device?",
+                isPresented: Binding(
+                    get: { forgetting != nil },
+                    set: { if !$0 { forgetting = nil } }
+                ),
+                titleVisibility: .visible,
+                presenting: forgetting
+            ) { device in
+                Button("Clear \(device.displayName ?? device.deviceId)",
+                       role: .destructive) {
+                    Task { await forget(device) }
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: { _ in
+                Text("Its name and settings are deleted for good. Readings it "
+                     + "already recorded stay in history. If the hardware comes "
+                     + "back, adopting its channel starts a fresh device.")
             }
             // Same treatment as sign-out: nothing destructive on a single tap,
             // and the dialog names the device rather than saying "this one".
@@ -280,11 +300,12 @@ struct SystemView: View {
     private var hardware: some View {
         Section {
             if let hardwareDevices, let capabilities {
-                ForEach(hardwareDevices, id: \.deviceId) { device in
+                let split = hardwareSections(hardwareDevices)
+                ForEach(split.adopted, id: \.deviceId) { device in
                     adoptedRow(device)
                 }
                 let free = capabilities.filter { $0.boundTo == nil }
-                if free.isEmpty && hardwareDevices.isEmpty {
+                if free.isEmpty && split.adopted.isEmpty && split.detached.isEmpty {
                     Text("The hub has not announced any hardware.")
                         .font(Theme.caption)
                         .foregroundStyle(Theme.tertiaryText)
@@ -298,6 +319,14 @@ struct SystemView: View {
                             availableRow(capability)
                         }
                         .accessibilityIdentifier("hardware-available-channel")
+                    }
+                }
+                if !split.detached.isEmpty {
+                    Text("Detached")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.tertiaryText)
+                    ForEach(split.detached, id: \.deviceId) { device in
+                        detachedRow(device)
                     }
                 }
                 if hardwareFailed {
@@ -341,6 +370,32 @@ struct SystemView: View {
             Button("Unadopt", role: .destructive) { unadopting = device }
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("unadopt-\(device.deviceId)")
+        }
+        .frame(minHeight: 44)
+    }
+
+    /// A device the hub still remembers but nothing currently commands. The
+    /// backend keeps the row on purpose (`unbind` is not a delete), so the
+    /// operator gets a way to say which of the two things they actually want:
+    /// reattach the same identity and history (Re-add), or delete the row for
+    /// good (Clear, confirmed — see `forgetting`).
+    @ViewBuilder
+    private func detachedRow(_ device: Components.Schemas.DeviceView) -> some View {
+        HStack {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(device.displayName ?? device.deviceId)
+                    .foregroundStyle(Theme.primaryText)
+                Text("released — history kept")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.tertiaryText)
+            }
+            Spacer()
+            Button("Re-add") { Task { await readopt(device) } }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("readopt-\(device.deviceId)")
+            Button("Clear", role: .destructive) { forgetting = device }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("forget-\(device.deviceId)")
         }
         .frame(minHeight: 44)
     }
@@ -468,6 +523,28 @@ struct SystemView: View {
             _ = try await model.client?.unbind(deviceId: device.deviceId)
         } catch {
             log.error("unadopt failed: \(String(describing: error))")
+            unadoptProblem = HumanError.describe(error)
+        }
+        await loadHardware()
+    }
+
+    private func readopt(_ device: Components.Schemas.DeviceView) async {
+        unadoptProblem = nil
+        do {
+            _ = try await model.client?.readopt(deviceId: device.deviceId)
+        } catch {
+            log.error("readopt failed: \(String(describing: error))")
+            unadoptProblem = HumanError.describe(error)
+        }
+        await loadHardware()
+    }
+
+    private func forget(_ device: Components.Schemas.DeviceView) async {
+        unadoptProblem = nil
+        do {
+            _ = try await model.client?.forget(deviceId: device.deviceId)
+        } catch {
+            log.error("forget failed: \(String(describing: error))")
             unadoptProblem = HumanError.describe(error)
         }
         await loadHardware()
