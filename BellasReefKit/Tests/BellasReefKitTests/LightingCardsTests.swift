@@ -135,7 +135,8 @@ struct LightingCardsTests {
 
         #expect(cards.count == 1)
         #expect(cards[0].hold == LightingCard.ActiveHold(
-            id: "8f14e45f-ceea-467e-9575-6e3c8e9caeb2", duty: 0.6, remainingS: 1200
+            id: "8f14e45f-ceea-467e-9575-6e3c8e9caeb2", duty: 0.6,
+            expiresAt: Date(timeIntervalSince1970: 1_786_343_122 + 1200)
         ))
     }
 

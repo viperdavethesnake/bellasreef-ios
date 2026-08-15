@@ -45,8 +45,15 @@ struct LightingView: View {
 
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                // A control surface showing a last-known duty with no
+                // connection indication is dishonest (review, 2026-08-15) —
+                // the same `StatusLine` TankView leads with, unmodified: it
+                // is driven purely by `monitor.tone`/`monitor.statusLine`,
+                // nothing tab-specific.
+                StatusLine(monitor: monitor)
+
                 if cards.isEmpty {
-                    emptyState(loaded: catalog.state == .loaded)
+                    emptyState(catalog: catalog)
                 } else {
                     ForEach(cards) { card in
                         LightingCardView(card: card, client: model.client)
@@ -79,17 +86,44 @@ struct LightingView: View {
         }
     }
 
-    /// §7.1: loading and empty are distinct states, not one blank panel.
-    /// Before the registry has loaded we do not yet know whether there is a
-    /// light to show, so this stays tentative; once `catalog` confirms
-    /// there truly is nothing adopted, the pinned copy says so plainly.
+    /// §7.1/§7.2: loading, confirmed-empty and failed are three different
+    /// states, not one collapsed to a bool (review, 2026-08-15 — a `.failed`
+    /// catalog used to render as an eternal "Loading lights…", which is
+    /// exactly the "spinner-forever" §7.1 rules out).
     @ViewBuilder
-    private func emptyState(loaded: Bool) -> some View {
-        Text(loaded ? "No lights adopted — adopt a PWM channel under System." : "Loading lights…")
-            .font(Theme.caption)
-            .foregroundStyle(loaded ? Theme.secondaryText : Theme.tertiaryText)
+    private func emptyState(catalog: DeviceCatalog) -> some View {
+        switch catalog.state {
+        case .idle, .loading:
+            Text("Loading lights…")
+                .font(Theme.caption)
+                .foregroundStyle(Theme.tertiaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 24)
+        case .loaded:
+            Text("No lights adopted — adopt a PWM channel under System.")
+                .font(Theme.caption)
+                .foregroundStyle(Theme.secondaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, 24)
+        case let .failed(message):
+            // Same idiom as `HistoryView.Failure`/`AuditLogView`'s retry
+            // state — amber, with a retry affordance — restated here rather
+            // than reused because those views' copy is hardcoded to their
+            // own tab ("Could not load history").
+            VStack(alignment: .leading, spacing: 10) {
+                Label("Could not load the device registry", systemImage: "exclamationmark.triangle.fill")
+                    .font(.headline)
+                    .foregroundStyle(Theme.attention)
+                Text(message)
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.secondaryText)
+                Button("Try again") { Task { await catalog.refresh() } }
+                    .buttonStyle(.bordered)
+                    .frame(minHeight: 44)
+            }
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.vertical, 24)
+        }
     }
 }
 
@@ -106,13 +140,13 @@ private struct LightingCardView: View {
 
     /// Percent, 0...100 — the *proposed* value. Seeded once from the hub's
     /// reported duty at first appearance and never re-synced from later
-    /// frames: the truth line (`card.reportedDuty`/`card.hold`) is what
+    /// frames: the truth line (`card.reportedDuty`/`effectiveHold`) is what
     /// renders hub state, and this must stay visibly the operator's own
     /// pending choice, not something the stream can silently overwrite out
     /// from under a drag in progress.
     @State private var proposedDuty: Double
     @State private var durationChoice: DurationChoice
-    @State private var customMinutesText = ""
+    @State private var customMinutesText: String
     /// Disables every control on this card while a Hold or Release is in
     /// flight (plan Task 2, Step 1).
     @State private var submitting = false
@@ -120,6 +154,27 @@ private struct LightingCardView: View {
     /// Toggled on a granted hold to fire the success haptic (design brief
     /// §7.4: "Overrides ... confirm with haptics").
     @State private var successPulse = 0
+
+    /// A Hold's own grant response, shown immediately rather than waiting on
+    /// the next state frame (review, 2026-08-15: `HoldOutcome.granted`
+    /// carries the whole created override for exactly this). Superseded the
+    /// moment `card.hold` — the frame's own account — is non-nil; see
+    /// `effectiveHold`.
+    @State private var optimisticHold: LightingCard.ActiveHold?
+    /// Override ids this card has locally released. A frame can lag a
+    /// release by one beat, and without this the stale frame would show the
+    /// just-released hold again with a live Release button — the "second
+    /// tap isn't silently possible" requirement. Cleared implicitly: once a
+    /// fresher frame reports a *different* (or no) override, the id this
+    /// holds no longer matches anything `effectiveHold` would show anyway.
+    @State private var releasedIDs: Set<String> = []
+    /// The hold pending confirmation, if the operator has tapped Release —
+    /// §7.4's standard destructive-confirm pattern (review, 2026-08-15:
+    /// ruled that §7.4 governs here, over this file's earlier no-confirm
+    /// reading of the plan). Holding the value itself, not just a `Bool`,
+    /// mirrors `SystemView`'s `revoking`/`forgetting`/`unadopting` —
+    /// `confirmationDialog(presenting:)` needs the row it will act on.
+    @State private var confirmingRelease: LightingCard.ActiveHold?
 
     private enum DurationChoice: Hashable {
         case preset(DurationPreset)
@@ -147,35 +202,60 @@ private struct LightingCardView: View {
         _proposedDuty = State(initialValue: (card.reportedDuty ?? 0) * 100)
         let allowed = allowedDurations(maxRuntimeS: card.maxRuntimeS)
         _durationChoice = State(initialValue: allowed.first.map(DurationChoice.preset) ?? .custom)
+        // Seeded valid rather than empty (review fold, 2026-08-15, mirroring
+        // AdoptDeviceSheet's poll-interval default): an empty field read as
+        // invalid before the operator had touched anything, so the amber
+        // hint appeared on a card nobody had edited yet.
+        let capMinutes = card.maxRuntimeS.map { Int($0 / 60) }
+        _customMinutesText = State(initialValue: String(max(1, min(capMinutes ?? 60, 60))))
+    }
+
+    /// The hold this card actually shows: the frame's own account when the
+    /// hub has one, falling back to this card's own optimistic grant
+    /// otherwise (review, 2026-08-15). Frame truth always wins when present
+    /// — the one exception is an id this card has itself just released,
+    /// which stays hidden even if a lagging frame still reports it, so a
+    /// confirmed release can never look re-releasable.
+    private var effectiveHold: LightingCard.ActiveHold? {
+        if let frameHold = card.hold {
+            return releasedIDs.contains(frameHold.id) ? nil : frameHold
+        }
+        return optimisticHold
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(alignment: .firstTextBaseline) {
+            HStack(alignment: .top) {
                 Text(card.name)
                     .font(Theme.sectionTitle)
                     .foregroundStyle(Theme.primaryText)
                 Spacer()
                 truthLine
             }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(truthAccessibilityLabel)
 
-            if let hold = card.hold {
-                HStack(alignment: .center) {
-                    Label(
-                        "Held at \(Int(hold.duty * 100))% · \(Self.remaining(hold.remainingS))",
-                        systemImage: "hand.raised.fill"
-                    )
-                    .font(Theme.caption)
-                    .foregroundStyle(Theme.attention)
-                    Spacer()
-                    // Not destructive (plan Global Constraints: Release
-                    // returns the light to its resting state) — plain tap,
-                    // no confirmation, no red.
-                    Button("Release") { Task { await release(overrideId: hold.id) } }
+            if let hold = effectiveHold {
+                // Ticks live off `Date()` rather than a number frozen at
+                // frame receipt (review, 2026-08-15): a static remaining-
+                // seconds count freezes during a quiet steady hold, which
+                // reads as the countdown having stopped.
+                TimelineView(.periodic(from: .now, by: 5)) { context in
+                    HStack(alignment: .center) {
+                        Label(
+                            "Held at \(Int(hold.duty * 100))% · "
+                                + "\(formatRemaining(secondsRemaining(hold, now: context.date)))",
+                            systemImage: "hand.raised.fill"
+                        )
                         .font(Theme.caption)
-                        .buttonStyle(.borderless)
-                        .disabled(submitting)
-                        .accessibilityIdentifier("lighting-release-\(card.id)")
+                        .foregroundStyle(Theme.attention)
+                        Spacer()
+                        Button("Release") { confirmingRelease = hold }
+                            .font(Theme.caption)
+                            .buttonStyle(.borderless)
+                            .disabled(submitting)
+                            .accessibilityIdentifier("lighting-release-\(card.id)")
+                    }
                 }
                 // 44pt minimum touch target on the row (§7.4), same idiom as
                 // SystemView's Revoke row — the label text stays small.
@@ -196,6 +276,7 @@ private struct LightingCardView: View {
                     .disabled(submitting)
                     .tint(Theme.accent)
                     .accessibilityIdentifier("lighting-slider-\(card.id)")
+                    .accessibilityLabel("\(card.name), proposed duty")
                     .accessibilityValue("\(Int(proposedDuty)) percent")
             }
 
@@ -222,21 +303,74 @@ private struct LightingCardView: View {
         .background(Theme.surface, in: .rect(cornerRadius: 12))
         .accessibilityElement(children: .contain)
         .sensoryFeedback(.success, trigger: successPulse)
+        // A problem sticks around only until the operator changes something
+        // — a stale rejection sitting under a fresh edit or a hold that has
+        // since changed shape reads as though the *new* state is what
+        // failed (review fold, 2026-08-15).
+        .onChange(of: proposedDuty) { problem = nil }
+        .onChange(of: durationChoice) { problem = nil }
+        .onChange(of: customMinutesText) { problem = nil }
+        .onChange(of: card.hold) { problem = nil }
+        // §7.4 standard destructive-confirm pattern, the same shape
+        // SystemView uses for Revoke/Unadopt/Clear (ruled 2026-08-15: this
+        // wins over this file's earlier no-confirm reading — control-red
+        // here is the platform's "this deletes something," not the safety
+        // red that governs status and interlocks, so the color concern that
+        // motivated skipping confirmation doesn't apply).
+        .confirmationDialog(
+            "Release this hold?",
+            isPresented: Binding(
+                get: { confirmingRelease != nil },
+                set: { if !$0 { confirmingRelease = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: confirmingRelease
+        ) { hold in
+            Button("Release \(card.name)", role: .destructive) {
+                Task { await release(overrideId: hold.id) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("The light returns to its resting state.")
+        }
+    }
+
+    private func secondsRemaining(_ hold: LightingCard.ActiveHold, now: Date) -> Double {
+        max(0, hold.expiresAt.timeIntervalSince(now))
     }
 
     @ViewBuilder
     private var truthLine: some View {
-        if let duty = card.reportedDuty {
-            Text("\(Int(duty * 100))%")
-                .font(Theme.value)
-                .foregroundStyle(Theme.secondaryText)
-        } else {
-            // Mirrors `AdoptedSilentRow` (TankView): inventing 0% here would
-            // claim a state the hub has not actually reported yet.
-            Text("no state yet")
+        VStack(alignment: .trailing, spacing: 0) {
+            // A one-word caption so truth vs. proposed isn't color-only
+            // (review fold, 2026-08-15) — pairs with "Set to" below.
+            Text("Now")
                 .font(Theme.caption)
-                .foregroundStyle(Theme.tertiaryText)
+                .foregroundStyle(Theme.secondaryText)
+            if let duty = card.reportedDuty {
+                Text("\(Int(duty * 100))%")
+                    .font(Theme.value)
+                    .foregroundStyle(Theme.secondaryText)
+            } else {
+                // Mirrors `AdoptedSilentRow` (TankView): inventing 0% here
+                // would claim a state the hub has not actually reported yet.
+                Text("no state yet")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.tertiaryText)
+            }
         }
+    }
+
+    /// Composed sentence, `TankView.ChannelRow.spoken(...)`'s pattern: name,
+    /// then duty (or its absence), then hold state, joined as one utterance
+    /// rather than three separately-focused elements.
+    private var truthAccessibilityLabel: String {
+        var parts = [card.name]
+        parts.append(card.reportedDuty.map { "\(Int($0 * 100)) percent" } ?? "no state yet")
+        if let hold = effectiveHold {
+            parts.append("held at \(Int(hold.duty * 100)) percent")
+        }
+        return parts.joined(separator: ", ")
     }
 
     @ViewBuilder
@@ -268,6 +402,8 @@ private struct LightingCardView: View {
                 if !customMinutesValid {
                     // §7.1 amber invalid state — guidance, not a destructive
                     // warning, same idiom as AdoptDeviceSheet's poll-interval hint.
+                    // Reachable only once the operator has edited away from
+                    // the seeded valid default, above.
                     Text(customMinutesHint)
                         .font(Theme.caption)
                         .foregroundStyle(Theme.attention)
@@ -317,7 +453,15 @@ private struct LightingCardView: View {
             switch try await client.hold(
                 target: card.id, duty: proposedDuty / 100, durationS: durationS, reason: "manual"
             ) {
-            case .granted:
+            case let .granted(overrideView):
+                // Show this grant now, not on the next frame (review,
+                // 2026-08-15) — `effectiveHold` prefers `card.hold` the
+                // moment the frame catches up, so this is only ever the
+                // gap-filler.
+                optimisticHold = LightingCard.ActiveHold(
+                    id: overrideView.id, duty: overrideView.duty, expiresAt: overrideView.expiresAt
+                )
+                releasedIDs.removeAll()
                 successPulse += 1
             case .notCommandable:
                 problem = .message("This light is observe-only and can't be commanded from here.")
@@ -336,9 +480,12 @@ private struct LightingCardView: View {
         defer { submitting = false }
         do {
             // `.released`/`.alreadyReleased` both mean the hold is gone —
-            // the next frame shows the light slewing back to its resting
-            // state, same as any other target change (spec Feature 2).
+            // clear it from the screen immediately (review, 2026-08-15)
+            // rather than waiting on the next frame, so a second tap on a
+            // just-released hold isn't possible.
             _ = try await client.release(overrideId: overrideId)
+            optimisticHold = nil
+            releasedIDs.insert(overrideId)
         } catch {
             problem = .message(HumanError.describe(error))
         }
@@ -353,16 +500,5 @@ private struct LightingCardView: View {
         case .fourHours: "4 h"
         case .eightHours: "8 h"
         }
-    }
-
-    /// Same wording as `TankView.ChannelRow.remaining(_:)` — duplicated
-    /// rather than shared, since that one is `private` to a file outside
-    /// this task's scope (plan Task 2 touches only `LightingView.swift` and
-    /// `RootView.swift`). Keep the two in sync if either changes.
-    private static func remaining(_ seconds: Double) -> String {
-        let minutes = Int(seconds) / 60
-        if minutes >= 60 { return "\(minutes / 60)h \(minutes % 60)m left" }
-        if minutes >= 1 { return "\(minutes)m left" }
-        return "under a minute left"
     }
 }

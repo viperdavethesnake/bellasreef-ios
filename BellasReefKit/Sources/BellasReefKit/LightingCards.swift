@@ -22,15 +22,22 @@ public struct LightingCard: Equatable, Identifiable, Sendable {
     /// it, regardless of which client placed it — there is no
     /// "held by another device, can't release from here" case to invent,
     /// because the wire never scopes an override to its creator.
+    ///
+    /// Carries `expiresAt` (also required on `OverrideContext`), not a
+    /// snapshot second-count: a static "remaining seconds" captured at frame
+    /// receipt freezes the moment the wire goes quiet during an otherwise
+    /// steady hold, which is exactly the dishonest "it looks stopped but
+    /// isn't" the countdown must not do (review fold, 2026-08-15). Whatever
+    /// renders this ticks it live against `Date()` instead.
     public struct ActiveHold: Equatable, Sendable {
         public let id: String
         public let duty: Double
-        public let remainingS: Double
+        public let expiresAt: Date
 
-        public init(id: String, duty: Double, remainingS: Double) {
+        public init(id: String, duty: Double, expiresAt: Date) {
             self.id = id
             self.duty = duty
-            self.remainingS = remainingS
+            self.expiresAt = expiresAt
         }
     }
 
@@ -80,7 +87,7 @@ public func lightingCards(
                 name: device.displayName ?? device.deviceId,
                 reportedDuty: frame.map(reportedDuty(from:)),
                 hold: frame?.override.map {
-                    LightingCard.ActiveHold(id: $0.id, duty: $0.duty, remainingS: $0.expiresInS)
+                    LightingCard.ActiveHold(id: $0.id, duty: $0.duty, expiresAt: $0.expiresAt)
                 },
                 maxRuntimeS: device.maxRuntimeS
             )
