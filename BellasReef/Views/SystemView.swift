@@ -528,10 +528,22 @@ struct SystemView: View {
         await loadHardware()
     }
 
+    /// Mirrors `AdoptDeviceSheet.adopt()`'s switch on `BindOutcome`
+    /// (AdoptDeviceSheet.swift:157–169): a documented non-2xx is a decision
+    /// the hub made, not a transport failure, so it gets its own copy through
+    /// `unadoptProblem` rather than being silently discarded.
     private func readopt(_ device: Components.Schemas.DeviceView) async {
         unadoptProblem = nil
         do {
-            _ = try await model.client?.readopt(deviceId: device.deviceId)
+            if let outcome = try await model.client?.readopt(deviceId: device.deviceId) {
+                switch outcome {
+                case .readopted: break
+                case .notDetached:
+                    unadoptProblem = "This device is no longer detached — the list may be out of date."
+                case .channelHeld:
+                    unadoptProblem = "Another device claimed this channel since the list loaded."
+                }
+            }
         } catch {
             log.error("readopt failed: \(String(describing: error))")
             unadoptProblem = HumanError.describe(error)
@@ -542,7 +554,16 @@ struct SystemView: View {
     private func forget(_ device: Components.Schemas.DeviceView) async {
         unadoptProblem = nil
         do {
-            _ = try await model.client?.forget(deviceId: device.deviceId)
+            if let outcome = try await model.client?.forget(deviceId: device.deviceId) {
+                switch outcome {
+                // .unknown (404) is treated as already-cleared: forget is
+                // idempotent, and the end state — no such row — is what the
+                // operator asked for either way.
+                case .forgotten, .unknown: break
+                case .stillAdopted:
+                    unadoptProblem = "This device is adopted again — unadopt it first."
+                }
+            }
         } catch {
             log.error("forget failed: \(String(describing: error))")
             unadoptProblem = HumanError.describe(error)
