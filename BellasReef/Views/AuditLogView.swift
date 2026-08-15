@@ -58,7 +58,13 @@ struct AuditLogView: View {
         case let .loaded(events):
             let filtered = filtered(events)
             if filtered.isEmpty {
-                Text("No audit events")
+                // Names which emptiness this is: a genuinely empty log reads
+                // differently from a filter that no longer matches anything
+                // in the current page (e.g. a low-frequency category aged
+                // out of the newest 200 on refresh). Without this, both look
+                // identical to "No audit events" — indistinguishable from
+                // data loss.
+                Text(selectedCategory.map { "No events in \($0)" } ?? "No audit events")
                     .font(Theme.caption)
                     .foregroundStyle(Theme.tertiaryText)
             } else {
