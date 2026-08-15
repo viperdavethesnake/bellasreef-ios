@@ -30,7 +30,5 @@
 	<string>Bella's Reef finds your hub on the local network. Nothing leaves your home; there is no cloud service.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
-	<key>UIUserInterfaceStyle</key>
-	<string>Dark</string>
 </dict>
 </plist>

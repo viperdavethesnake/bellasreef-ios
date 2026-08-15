@@ -49,9 +49,9 @@ targets:
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
-        # Dark is primary (design brief §2): this app opens at night next to an
-        # actinic-lit tank, and a white screen is a flashbang.
-        UIUserInterfaceStyle: Dark
+        # No UIUserInterfaceStyle pin: the app follows the system appearance
+        # (UX-1). Dark stays primary by design intent (design brief §2) — the
+        # Theme palette resolves an unspecified trait to dark — not by pin.
         ITSAppUsesNonExemptEncryption: false
         # Bonjour discovery. iOS requires both the usage string and an explicit
         # service list — a browse without them silently returns nothing.

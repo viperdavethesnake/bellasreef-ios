@@ -3,6 +3,88 @@
 // Palette and type, from docs/ios-design-brief.md §1–2 in the backend repo.
 
 import SwiftUI
+import UIKit
+
+/// The raw sRGB components of one appearance's palette.
+///
+/// Plain doubles rather than `Color` so the contrast suite in `ThemeTests` can
+/// compute WCAG relative luminance directly — resolving a dynamic `UIColor`
+/// needs a trait environment, and these numbers *are* the source the dynamic
+/// colours are built from. Ten roles, same semantics in both appearances: a
+/// reader who knows the dark app must recognise every colour's meaning in
+/// light.
+public struct Palette: Sendable {
+    public struct RGB: Sendable {
+        public let red: Double
+        public let green: Double
+        public let blue: Double
+
+        init(_ red: Double, _ green: Double, _ blue: Double) {
+            self.red = red
+            self.green = green
+            self.blue = blue
+        }
+    }
+
+    public let base: RGB
+    public let surface: RGB
+    public let surfaceRaised: RGB
+    public let primaryText: RGB
+    public let secondaryText: RGB
+    public let tertiaryText: RGB
+    public let accent: RGB
+    public let attention: RGB
+    public let safety: RGB
+    public let silence: RGB
+
+    /// The primary appearance. These values are settled — the contrast suite
+    /// pins them; do not "improve" them.
+    public static let dark = Palette(
+        // Deep blue-grey near-black — 20,000K water, not pure black. Pure black
+        // would read as "off" rather than "night".
+        base: RGB(0.043, 0.055, 0.075),
+        surface: RGB(0.075, 0.090, 0.118),
+        surfaceRaised: RGB(0.110, 0.129, 0.165),
+        primaryText: RGB(0.918, 0.937, 0.961),
+        secondaryText: RGB(0.612, 0.655, 0.706),
+        // Lifted from (0.392, 0.435, 0.490) to clear WCAG AA for normal text.
+        //
+        // The original measured **3.78:1** against `base` — fine for large
+        // text, a fail for the captions and sensor ids it was actually used on.
+        // Design brief §7.5 requires AA for all text and calls out the dimmed
+        // stale treatment by name: it must read as quieter, not as decoration.
+        // This is 4.60:1, the smallest bump along the same hue that passes.
+        tertiaryText: RGB(0.441, 0.489, 0.551),
+        accent: RGB(0.153, 0.831, 0.808),
+        attention: RGB(0.984, 0.749, 0.286),
+        safety: RGB(0.937, 0.325, 0.314),
+        silence: RGB(0.639, 0.549, 0.965)
+    )
+
+    /// The secondary appearance, for daylight use. Same hue for every role —
+    /// teal accent, amber attention, red safety, violet silence — darkened
+    /// until the contrast suite passes on a light ground.
+    public static let light = Palette(
+        // Cool near-white blue-grey — daylight over water, not paper. The same
+        // reasoning as dark's not-pure-black, from the opposite pole: pure
+        // white would read as a document, and this app is a window.
+        base: RGB(0.929, 0.941, 0.957),
+        surface: RGB(0.957, 0.965, 0.976),
+        surfaceRaised: RGB(0.984, 0.988, 0.992),
+        primaryText: RGB(0.090, 0.112, 0.145),
+        secondaryText: RGB(0.290, 0.329, 0.380),
+        tertiaryText: RGB(0.365, 0.408, 0.463),
+        // The dark accent teal reads 1.61:1 on this ground — invisible. Same
+        // hue, pulled down until it clears 3:1 (non-text floor) with margin.
+        accent: RGB(0.000, 0.478, 0.463),
+        // Amber darkens toward ochre; that is the cost of AA amber-as-text on
+        // a light ground, and it still reads as "attention, not alarm".
+        attention: RGB(0.573, 0.365, 0.000),
+        // Recognisably the same red as dark's safety, deepened to clear AA.
+        safety: RGB(0.788, 0.153, 0.145),
+        silence: RGB(0.416, 0.318, 0.796)
+    )
+}
 
 /// The app's colour system.
 ///
@@ -17,39 +99,41 @@ import SwiftUI
 ///    failed network call. When red appears it must mean something.
 public enum Theme {
 
+    /// A colour that resolves per appearance: `Palette.light` when the trait
+    /// environment says light, `Palette.dark` for dark *and* unspecified —
+    /// dark is primary, so it is also the answer when nobody has said.
+    private static func adaptive(_ role: @escaping @Sendable (Palette) -> Palette.RGB) -> Color {
+        Color(UIColor { traits in
+            let palette: Palette = traits.userInterfaceStyle == .light ? .light : .dark
+            let c = role(palette)
+            return UIColor(red: c.red, green: c.green, blue: c.blue, alpha: 1)
+        })
+    }
+
     // MARK: Base
 
-    /// Deep blue-grey near-black — 20,000K water, not pure black. Pure black
-    /// would read as "off" rather than "night".
-    public static let base = Color(red: 0.043, green: 0.055, blue: 0.075)
-    public static let surface = Color(red: 0.075, green: 0.090, blue: 0.118)
-    public static let surfaceRaised = Color(red: 0.110, green: 0.129, blue: 0.165)
+    public static let base = adaptive { $0.base }
+    public static let surface = adaptive { $0.surface }
+    public static let surfaceRaised = adaptive { $0.surfaceRaised }
 
     // MARK: Content
 
-    public static let primaryText = Color(red: 0.918, green: 0.937, blue: 0.961)
-    public static let secondaryText = Color(red: 0.612, green: 0.655, blue: 0.706)
-    /// Lifted from (0.392, 0.435, 0.490) to clear WCAG AA for normal text.
-    ///
-    /// The original measured **3.78:1** against `base` — fine for large text,
-    /// a fail for the captions and sensor ids it was actually used on. Design
-    /// brief §7.5 requires AA for all text and calls out the dimmed stale
-    /// treatment by name: it must read as quieter, not as decoration. This is
-    /// 4.60:1, the smallest bump along the same hue that passes.
-    public static let tertiaryText = Color(red: 0.441, green: 0.489, blue: 0.551)
+    public static let primaryText = adaptive { $0.primaryText }
+    public static let secondaryText = adaptive { $0.secondaryText }
+    public static let tertiaryText = adaptive { $0.tertiaryText }
 
     // MARK: Semantic
 
     /// The single accent: interactive elements and the healthy state. One
     /// accent everywhere — the tank carries the colour, the UI stays nearly
     /// monochrome.
-    public static let accent = Color(red: 0.153, green: 0.831, blue: 0.808)
+    public static let accent = adaptive { $0.accent }
 
     /// Attention, not alarm: stale sensor, pending approval, override active.
-    public static let attention = Color(red: 0.984, green: 0.749, blue: 0.286)
+    public static let attention = adaptive { $0.attention }
 
     /// Safety only. See the type-level note — this is not an error colour.
-    public static let safety = Color(red: 0.937, green: 0.325, blue: 0.314)
+    public static let safety = adaptive { $0.safety }
 
     /// A probe that stopped reporting: we do not know, as distinct from we know
     /// and it is bad.
@@ -60,7 +144,7 @@ public enum Theme {
     /// the water that silence is precisely the absence of. Violet sits outside
     /// the temperature metaphor altogether, which is the point: this band is
     /// about the instrumentation, not the tank.
-    public static let silence = Color(red: 0.639, green: 0.549, blue: 0.965)
+    public static let silence = adaptive { $0.silence }
 
     // MARK: Type
 
