@@ -28,6 +28,16 @@ public final class DeviceCatalog {
     public private(set) var state: Load = .idle
     public private(set) var sensors: [Components.Schemas.DeviceView] = []
 
+    /// Every registered device, sensors and actuators alike (`GET /devices`).
+    ///
+    /// Distinct from `sensors` (`GET /sensors`, server-filtered to
+    /// `kind == "sensor"`): that list feeds probe-specific UI — names, alert
+    /// bands — that has no business seeing a light or a pump. The Equipment
+    /// section needs the reverse slice, so this is fetched alongside it
+    /// rather than folded in, and nothing here narrows `sensors`'s existing
+    /// contract.
+    public private(set) var devices: [Components.Schemas.DeviceView] = []
+
     private let client: HubClient
 
     public init(client: HubClient) {
@@ -53,6 +63,7 @@ public final class DeviceCatalog {
             sensors = try await client.sensors().sorted { lhs, rhs in
                 (lhs.displayName ?? lhs.deviceId) < (rhs.displayName ?? rhs.deviceId)
             }
+            devices = try await client.devices()
             state = .loaded
         } catch {
             log.error("could not load devices: \(String(describing: error))")
