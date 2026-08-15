@@ -38,9 +38,7 @@ struct AdoptDeviceSheet: View {
     private var pollIntervalSeconds: Int? { Int(pollIntervalText.trimmingCharacters(in: .whitespaces)) }
 
     private var pollIntervalValid: Bool {
-        guard !isActuator else { return true }
-        guard let seconds = pollIntervalSeconds else { return false }
-        return seconds > 0
+        isActuator || PollInterval.isValid(pollIntervalText)
     }
 
     var body: some View {
@@ -63,9 +61,31 @@ struct AdoptDeviceSheet: View {
                         }
                         .disabled(true)
                     } else {
-                        TextField("Poll every N seconds", text: $pollIntervalText)
-                            .keyboardType(.numberPad)
-                            .accessibilityIdentifier("adopt-poll-interval-field")
+                        // LabeledContent, matching the sheet's own idiom for a
+                        // row with a fixed caption (Source/Channel/Driver above,
+                        // the Role picker below): the unit lives in the label
+                        // itself, "(seconds)", the same way SensorDetailSheet's
+                        // threshold fields carry their unit on the section
+                        // header rather than leaving a bare number to speak for
+                        // itself — which is exactly what put an unexplained "5"
+                        // in front of David adopting the DS18B20.
+                        LabeledContent("Poll interval (seconds)") {
+                            TextField("Seconds", text: $pollIntervalText)
+                                .keyboardType(.numberPad)
+                                .multilineTextAlignment(.trailing)
+                                .foregroundStyle(Theme.accent)
+                                .accessibilityIdentifier("adopt-poll-interval-field")
+                        }
+                        if !pollIntervalValid {
+                            // Smallest honest hint for the floor below. Amber,
+                            // not red, per §7.1 — this is guidance, not a
+                            // destructive-action warning.
+                            Text("At least \(PollInterval.minimumSeconds) seconds — "
+                                 + "a probe read can take up to 831 ms.")
+                                .font(Theme.caption)
+                                .foregroundStyle(Theme.attention)
+                                .accessibilityIdentifier("adopt-poll-interval-hint")
+                        }
                     }
                 }
                 Section {
