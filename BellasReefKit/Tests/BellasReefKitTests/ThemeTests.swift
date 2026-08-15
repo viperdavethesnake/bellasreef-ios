@@ -69,6 +69,13 @@ struct DarkPaletteContrastTests {
         #expect(contrast(p.attention, p.surfaceRaised) >= 4.5)
     }
 
+    /// The audit log's category badge: secondaryText on a surfaceRaised
+    /// capsule (AuditLogView). Hand-computed at ~6.6:1 in review; this pins it
+    /// so drift in either colour is caught rather than trusted from memory.
+    @Test func secondaryOnRaisedSurface() {
+        #expect(contrast(p.secondaryText, p.surfaceRaised) >= 4.5)
+    }
+
     /// Non-text UI (sparkline stroke, tint): WCAG 1.4.11 floor.
     @Test func accentOnBase() {
         #expect(contrast(p.accent, p.base) >= 3.0)
@@ -156,6 +163,13 @@ struct LightPaletteContrastTests {
 
     @Test func attentionOnRaisedSurface() {
         #expect(contrast(p.attention, p.surfaceRaised) >= 4.5)
+    }
+
+    /// The audit log's category badge: secondaryText on a surfaceRaised
+    /// capsule (AuditLogView). Hand-computed at ~7.5:1 in review; this pins it
+    /// so drift in either colour is caught rather than trusted from memory.
+    @Test func secondaryOnRaisedSurface() {
+        #expect(contrast(p.secondaryText, p.surfaceRaised) >= 4.5)
     }
 
     @Test func accentOnBase() {
