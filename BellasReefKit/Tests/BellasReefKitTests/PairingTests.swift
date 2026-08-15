@@ -115,6 +115,55 @@ struct PairingTests {
         }
     }
 
+    // MARK: Setup-code pairing (3.7.0)
+
+    @Test("a 422 on the plain flow still names the name, unchanged")
+    func plainFlowRejectionUnchanged() async {
+        let transport = StubTransport { _, _, _ in (422, nil) }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        await #expect(throws: HubClient.ClientError.self) {
+            _ = try await client.pair(clientName: "iPad")
+        }
+    }
+
+    @Test("a 422 on a code-bearing call is its own outcome, not a thrown reason")
+    func codeRejected() async throws {
+        let transport = StubTransport { _, _, _ in (422, nil) }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        guard case .codeRejected = try await client.pair(clientName: "iPad", setupCode: "7KF29QMD") else {
+            Issue.record("a 422 with a setup code should be .codeRejected, not thrown")
+            return
+        }
+    }
+
+    @Test("a 429 on a code-bearing call is throttled, not a thrown reason")
+    func codeThrottled() async throws {
+        let transport = StubTransport { _, _, _ in (429, nil) }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        guard case .throttled = try await client.pair(clientName: "iPad", setupCode: "7KF29QMD") else {
+            Issue.record("a 429 should be .throttled, not thrown")
+            return
+        }
+    }
+
+    @Test("a setup code rides on the wire, normalized")
+    func setupCodeOnTheWire() async throws {
+        let log = CallLog()
+        let transport = StubTransport { operation, _, body in
+            await log.record(operation)
+            let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            #expect(parsed?["setup_code"] as? String == "7KF29QMD")
+            return (200, json(#"{"refresh_token":"rt","client_id":"c"}"#))
+        }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        _ = try await client.pair(clientName: "iPad", setupCode: "7KF29QMD")
+        #expect(await log.count(of: "pair") == 1)
+    }
+
     // MARK: The pre-flight
 
     @Test("a Keychain that cannot hold a credential stops pairing before the hub spends anything")

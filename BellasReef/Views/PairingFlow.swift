@@ -221,7 +221,20 @@ struct HubIdentifyCard: View {
 
     @ViewBuilder
     private func action(_ info: Components.Schemas.Info) -> some View {
-        if recoveryNeeded {
+        if info.setupMode == true, let client {
+            // Feature 2, 2026-08-15 new-owner-experience spec: a hub that
+            // has never paired anyone shows the printed code instead of the
+            // request-and-wait UI. `setup_mode` is false for every later
+            // pair, so this branch never shadows the flow below it.
+            SetupCodeEntry(
+                client: client,
+                onGranted: { refreshToken, clientId in
+                    await complete(refreshToken: refreshToken, clientId: clientId, using: client)
+                },
+                onSetupModeEnded: { await refreshInfo() },
+                onError: { problem = $0 }
+            )
+        } else if recoveryNeeded {
             // Verbatim from auth.md: the operator needs the exact command, and
             // paraphrasing a recovery instruction is how people end up stuck.
             VStack(spacing: 12) {
@@ -331,6 +344,22 @@ struct HubIdentifyCard: View {
         }
     }
 
+    /// Re-checks `/info` on the existing client, without discarding it.
+    ///
+    /// `SetupCodeEntry` calls this after a rejected setup code: the code may
+    /// have paired a different device in the meantime, which flips
+    /// `setup_mode` false and sends `action(_:)` back to the normal
+    /// request-and-wait branch on its own. A failure here is silent by
+    /// design — the setup-code screen is still showing its own rejection
+    /// copy, and there is nothing more useful to say about a background
+    /// re-check that did not land.
+    private func refreshInfo() async {
+        guard let client else { return }
+        if let fresh = try? await client.info() {
+            info = fresh
+        }
+    }
+
     private func pair() async {
         pairing = true
         defer { pairing = false }
@@ -345,6 +374,12 @@ struct HubIdentifyCard: View {
                 self.pending = pending
             case .needsRecoveryCLI:
                 recoveryNeeded = true
+            case .codeRejected, .throttled:
+                // Unreachable here: this call never sends a setupCode, and
+                // the hub only returns these two in response to one.
+                // Handled so the switch stays exhaustive as the outcome
+                // enum grows for SetupCodeEntry's use.
+                problem = "unexpected pairing response"
             }
         } catch {
             problem = "\(error)"

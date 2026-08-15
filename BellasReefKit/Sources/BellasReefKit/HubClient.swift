@@ -18,6 +18,17 @@ public actor HubClient {
         case pending(PendingPairing)
         /// Every client is revoked and no window is open — nobody can approve.
         case needsRecoveryCLI
+        /// Setup mode, and the code was missing or wrong. 422 — but the
+        /// 3.7.0 contract carries no reason body for that response (it also
+        /// covers a rejected `client_name` on the plain flow, which shares
+        /// the same status and shape), so this is a distinct case rather
+        /// than a thrown `.rejected(reason)`: the caller supplies its own
+        /// copy, never one read off the wire. Only returned when this call
+        /// carried a `setupCode` — see `pair(clientName:setupCode:)`.
+        case codeRejected
+        /// Too many failed setup-code attempts, globally throttled. 429 —
+        /// only reachable when this call carried a `setupCode`.
+        case throttled
     }
 
     /// The 202 body, whole.
@@ -455,7 +466,7 @@ public actor HubClient {
     /// time that this device cannot keep a secret means the credential is gone
     /// and the only way back is SSH. The probe costs one Keychain round trip and
     /// moves that discovery to the side of the line where nothing is spent.
-    public func pair(clientName: String) async throws -> PairingOutcome {
+    public func pair(clientName: String, setupCode: String? = nil) async throws -> PairingOutcome {
         do {
             try tokens.probe()
         } catch {
@@ -463,7 +474,7 @@ public actor HubClient {
         }
 
         let output = try await client.pair(
-            body: .json(.init(clientName: clientName))
+            body: .json(.init(clientName: clientName, setupCode: setupCode))
         )
         switch output {
         case let .ok(response):
@@ -492,12 +503,22 @@ public actor HubClient {
                 "another device used the recovery window first — open a new one on the hub"
             )
         case .unprocessableContent:
-            throw ClientError.rejected("the hub would not accept that name")
+            // 3.7.0: 422 has no body, and covers two different refusals that
+            // share the one status code — a rejected `client_name` (plain
+            // flow) or a missing/wrong `setup_code` (setup-code flow). Which
+            // one it was is decided by what this call sent, not by anything
+            // the hub sends back (controller ruling, 2026-08-15: do not
+            // parse an undeclared body).
+            guard setupCode != nil else {
+                throw ClientError.rejected("the hub would not accept that name")
+            }
+            return .codeRejected
         case .tooManyRequests:
-            // 3.7.0: setup-code attempts are rate-limited. The hub sends
-            // Retry-After but the spec doesn't model it as a typed header,
-            // so this is a flat rejection rather than a counted backoff.
-            throw ClientError.rejected("too many failed setup-code attempts — wait and try again")
+            // 3.7.0: only a setup-code attempt is rate-limited, so this is
+            // only reachable when `setupCode` was supplied. Returned rather
+            // than thrown so the setup-code screen shows its own copy
+            // instead of a reason the contract never sends.
+            return .throttled
         case let .undocumented(statusCode, _):
             throw ClientError.unexpected("pair returned \(statusCode)")
         }
