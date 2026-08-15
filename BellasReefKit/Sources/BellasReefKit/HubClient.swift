@@ -437,6 +437,11 @@ public actor HubClient {
             )
         case .unprocessableContent:
             throw ClientError.rejected("the hub would not accept that name")
+        case .tooManyRequests:
+            // 3.7.0: setup-code attempts are rate-limited. The hub sends
+            // Retry-After but the spec doesn't model it as a typed header,
+            // so this is a flat rejection rather than a counted backoff.
+            throw ClientError.rejected("too many failed setup-code attempts — wait and try again")
         case let .undocumented(statusCode, _):
             throw ClientError.unexpected("pair returned \(statusCode)")
         }

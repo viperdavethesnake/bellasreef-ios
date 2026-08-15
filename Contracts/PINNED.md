@@ -6,11 +6,11 @@ reviewable diff rather than something that shifts under the app.
 
 | | |
 |---|---|
-| Backend commit | `da1f36c` |
-| CI run | exported locally from `da1f36c`'s committed `openapi.json`; re-pin from the artifact once that run is green |
-| Pinned on | 2026-08-13 |
-| OpenAPI | 3.1.0, 21 paths |
-| Contracts version | 3.6.0 |
+| Backend commit | `70a78ce` |
+| CI run | exported locally from `70a78ce`'s committed `openapi.json`; re-pin from the artifact once that run is green |
+| Pinned on | 2026-08-15 |
+| OpenAPI | 3.1.0, 23 paths |
+| Contracts version | 3.7.0 |
 | Frame schema | v1 |
 
 ## Refreshing
@@ -51,3 +51,28 @@ device's binding is released. Additive and non-breaking — the generator's
 `DeviceView` struct grows one more optional property, nothing else in the spec
 moved. Lets an adopted-device row show which physical channel it claims,
 matching the available-channel rows, which already showed it.
+
+## What 3.6.0 → 3.7.0 added
+
+The new-owner experience: a factory-reset hub has devices in its registry that
+nobody has claimed yet, and this is the surface for readopting or forgetting
+them.
+
+| Symbol | Why it was missing from the app |
+|---|---|
+| `Info.setup_mode` (`setupMode`) | nothing told the client the hub is unclaimed and pairing wants a setup code |
+| `PairRequest.setup_code` (`setupCode`) | the field that carries the code in setup mode; required/rejected server-side, not client-validated |
+| `POST /api/v1/pair` 429 | setup-code attempts are now rate-limited; `pair()` gained a `tooManyRequests` outcome |
+| `POST /api/v1/pair` 422 | dropped its typed `HTTPValidationError` body — description-only now, matching `bindDevice`/`history` |
+| `AuditEvent.action` | the audit log's category system needed a machine-readable action alongside its free-text `event` |
+| `DeviceView.adopted` (required, non-optional `Bool`) | distinguishes a device this owner has claimed from one left in the registry by a previous owner |
+| `POST /api/v1/devices/{id}/readopt` (`readoptDevice`) | claims an unadopted device into this owner's registry |
+| `POST /api/v1/devices/{id}/forget` (`forgetDevice`) | discards an unadopted device instead of claiming it |
+
+`DeviceView.adopted` being required broke the one place in `BellasReefKit`
+that hand-builds a `DeviceView` fixture
+(`EquipmentRowsTests.EquipmentFixtures.device`) — updated to pass
+`adopted: true`, since every fixture there represents an already-adopted
+actuator. `HubClient.pair(clientName:)`'s switch gained a `.tooManyRequests`
+case; the dropped typed 422 body needed no call-site change because the
+existing `.unprocessableContent` case never read the body.

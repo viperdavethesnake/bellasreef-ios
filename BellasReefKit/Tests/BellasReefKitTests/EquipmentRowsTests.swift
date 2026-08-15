@@ -17,6 +17,7 @@ private enum EquipmentFixtures {
     ) -> Components.Schemas.DeviceView {
         .init(
             actuatorClass: actuatorClass,
+            adopted: true,
             deviceId: id,
             displayName: name,
             driverId: "pca9685",
