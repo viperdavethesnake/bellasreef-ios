@@ -514,10 +514,18 @@ public actor HubClient {
             }
             return .codeRejected
         case .tooManyRequests:
-            // 3.7.0: only a setup-code attempt is rate-limited, so this is
-            // only reachable when `setupCode` was supplied. Returned rather
-            // than thrown so the setup-code screen shows its own copy
-            // instead of a reason the contract never sends.
+            // 3.7.0: only a setup-code attempt is rate-limited, so this
+            // should only be reachable when `setupCode` was supplied — but
+            // "should" is not "is", and a code-less 429 must not silently
+            // become an outcome case the plain flow's exhaustive switch has
+            // no honest handling for. Symmetric with the 422 arm just
+            // above: thrown for the code-less caller (unchanged from before
+            // setup codes existed), returned as an outcome only when this
+            // call carried a `setupCode`, so the setup-code screen can show
+            // its own copy instead of a reason the contract never sends.
+            guard setupCode != nil else {
+                throw ClientError.rejected("too many failed setup-code attempts — wait and try again")
+            }
             return .throttled
         case let .undocumented(statusCode, _):
             throw ClientError.unexpected("pair returned \(statusCode)")

@@ -32,7 +32,14 @@ struct SetupCodeEntry: View {
     private enum FieldState: Equatable {
         case idle
         case submitting
+        /// The code field's own submit came back wrong. §7.1 "rejected".
         case rejected
+        /// The "I don't have a code" submit came back 422 — no window is
+        /// open and a code has already been minted, so a code-less pair()
+        /// no longer resolves via blind TOFU (review ruling, 2026-08-15,
+        /// part (b)). Same visual slot as `.rejected`, different copy: this
+        /// one is never about a wrong code, because no code was sent.
+        case noCodeRejected
         case throttled
     }
 
@@ -73,6 +80,12 @@ struct SetupCodeEntry: View {
                 .accessibilityIdentifier("setup-code-field")
                 .padding(10)
                 .background(Theme.surfaceRaised, in: .rect(cornerRadius: 8))
+                // Editing the code retires whatever the last submit said —
+                // "that code isn't right" surviving a fresh, uncommented
+                // keystroke reads as a verdict on text nobody submitted yet.
+                .onChange(of: entry) {
+                    if state != .submitting { state = .idle }
+                }
 
             nameField
 
@@ -92,6 +105,12 @@ struct SetupCodeEntry: View {
                     .font(Theme.caption)
                     .foregroundStyle(Theme.attention)
                     .multilineTextAlignment(.center)
+            case .noCodeRejected:
+                Text("No code and no open pairing window. On the hub, run "
+                     + "`bellasreef setup-code` to print a fresh code.")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.attention)
+                    .multilineTextAlignment(.center)
             case .throttled:
                 Text("Too many attempts — wait a minute.")
                     .font(Theme.caption)
@@ -100,6 +119,17 @@ struct SetupCodeEntry: View {
             case .idle, .submitting:
                 EmptyView()
             }
+
+            // The fire escape for a lost or never-received code. Deliberately
+            // plain and small next to `Continue` — this is the exceptional
+            // path, not an equal alternative to typing the code (review
+            // ruling, 2026-08-15, part (b)).
+            Button("I don't have a code") {
+                Task { await submitWithoutCode() }
+            }
+            .font(Theme.caption)
+            .foregroundStyle(Theme.secondaryText)
+            .disabled(state == .submitting || !DeviceName.isUsable(clientName))
         }
         .frame(maxWidth: 320)
     }
@@ -143,6 +173,49 @@ struct SetupCodeEntry: View {
                 state = .idle
                 onError("the hub returned an unexpected pairing outcome")
             }
+        } catch {
+            state = .idle
+            onError("\(error)")
+        }
+    }
+
+    /// The window-flow fire escape, reached from inside setup mode.
+    ///
+    /// A code-less `pair()` is not a shortcut around the code — it is the
+    /// same call `bellasreef pair`'s window flow makes, and the hub resolves
+    /// it the same way regardless of which screen sent it (review ruling,
+    /// 2026-08-15, part (b)): an open recovery window grants immediately: an
+    /// operator who opened one on the hub is not stuck behind a code they
+    /// never received. With no window open, setup mode with no code ever
+    /// minted still grants by blind TOFU — first client in, same as always.
+    /// Only "a code exists and no window is open" comes back 422, which
+    /// reads as "the code path is the only path right now" rather than as a
+    /// wrong code, because this call sends none.
+    private func submitWithoutCode() async {
+        state = .submitting
+        let name = clientName.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            switch try await client.pair(clientName: name) {
+            case let .granted(refreshToken, clientId):
+                await onGranted(refreshToken, clientId)
+            case .pending, .needsRecoveryCLI, .codeRejected, .throttled:
+                // Unreachable while setup_mode is true: setup mode means no
+                // client has ever paired, so a code-less call here resolves
+                // via the window or blind-TOFU path — granted or 422, never
+                // queued, fire-escaped, or code-throttled (those last two
+                // are only returned when this call carries a setupCode, and
+                // this one never does).
+                state = .idle
+                onError("the hub returned an unexpected pairing outcome")
+            }
+        } catch HubClient.ClientError.rejected {
+            // Almost always the 422: no window open, and a code has already
+            // been minted. `.rejected` also covers losing a 409 window race
+            // against another device — the same copy still reads correctly
+            // there ("no open window" became true the moment it lost), so
+            // this does not need to split further, the same simplification
+            // already made for `.codeRejected` above.
+            state = .noCodeRejected
         } catch {
             state = .idle
             onError("\(error)")

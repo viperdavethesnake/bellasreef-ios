@@ -164,6 +164,35 @@ struct PairingTests {
         #expect(await log.count(of: "pair") == 1)
     }
 
+    @Test("a nil setup code is omitted from the wire, not encoded as null")
+    func setupCodeOmittedWhenNil() async throws {
+        // Load-bearing: the plain flow's byte-identity with the pre-3.7.0
+        // wire shape rests on this. A synthesized Codable that switched to
+        // encoding `"setup_code": null` would still pass every outcome test
+        // above — none of them inspect the body when no code is sent.
+        let log = CallLog()
+        let transport = StubTransport { operation, _, body in
+            await log.record(operation)
+            let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            #expect(parsed?.keys.contains("setup_code") == false)
+            return (200, json(#"{"refresh_token":"rt","client_id":"c"}"#))
+        }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        _ = try await client.pair(clientName: "iPad")
+        #expect(await log.count(of: "pair") == 1)
+    }
+
+    @Test("a 429 on a code-less call is thrown, symmetric with the 422 arm above it")
+    func plainFlowThrottleUnchanged() async {
+        let transport = StubTransport { _, _, _ in (429, nil) }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        await #expect(throws: HubClient.ClientError.self) {
+            _ = try await client.pair(clientName: "iPad")
+        }
+    }
+
     // MARK: The pre-flight
 
     @Test("a Keychain that cannot hold a credential stops pairing before the hub spends anything")
