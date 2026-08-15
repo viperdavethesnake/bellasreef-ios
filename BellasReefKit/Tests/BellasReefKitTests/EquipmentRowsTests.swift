@@ -69,7 +69,25 @@ struct EquipmentRowsTests {
         )
 
         #expect(sections.count == 1)
-        #expect(sections[0].rows == [.reporting(id: "light-1", frame: frame)])
+        #expect(sections[0].rows == [.reporting(id: "light-1", name: "Display light", frame: frame)])
+    }
+
+    /// A device does not visibly rename itself the moment its first frame
+    /// arrives: `.reporting` carries the same display name `.adoptedSilent`
+    /// would have shown, resolved from the registry rather than the wire.
+    @Test("an adopted device with a frame renders under its display name")
+    func adoptedWithFrameCarriesDisplayName() {
+        let device = EquipmentFixtures.device(id: "light-1", name: "Display light")
+        let frame = EquipmentFixtures.frame(id: "light-1")
+        let sections = equipmentRows(
+            devices: [device], frames: ["light-1": frame], roles: ["light-1": "light"]
+        )
+
+        guard case let .reporting(_, name, _) = sections[0].rows[0] else {
+            Issue.record("expected a reporting row")
+            return
+        }
+        #expect(name == "Display light")
     }
 
     @Test("a frame with no adopted device behind it still appears")
@@ -81,6 +99,22 @@ struct EquipmentRowsTests {
 
         #expect(sections.count == 1)
         #expect(sections[0].role == "pump")
-        #expect(sections[0].rows == [.reporting(id: "mystery-1", frame: frame)])
+        #expect(sections[0].rows == [.reporting(id: "mystery-1", name: "mystery-1", frame: frame)])
+    }
+
+    /// No adopted device means no registry name to resolve — the orphan-frame
+    /// fallback stays the raw id, same as before this fix.
+    @Test("an orphan frame with no adopted device renders under its id")
+    func orphanFrameFallsBackToId() {
+        let frame = EquipmentFixtures.frame(id: "mystery-1")
+        let sections = equipmentRows(
+            devices: [], frames: ["mystery-1": frame], roles: ["mystery-1": "pump"]
+        )
+
+        guard case let .reporting(_, name, _) = sections[0].rows[0] else {
+            Issue.record("expected a reporting row")
+            return
+        }
+        #expect(name == "mystery-1")
     }
 }

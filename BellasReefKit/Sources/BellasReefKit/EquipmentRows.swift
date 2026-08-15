@@ -11,12 +11,16 @@ import Foundation
 /// with invented zeros) is what keeps `.adoptedSilent` from ever claiming a
 /// duty we do not have.
 public enum EquipmentRow: Equatable, Identifiable {
-    case reporting(id: String, frame: Components.Schemas.StateFrame)
+    /// `name` is the adopted device's display name, or the raw id when the
+    /// frame has no adopted device behind it (the orphan-frame case) — the
+    /// same fallback `.adoptedSilent` already used, so a device no longer
+    /// renames itself the moment its first frame arrives.
+    case reporting(id: String, name: String, frame: Components.Schemas.StateFrame)
     case adoptedSilent(id: String, name: String)
 
     public var id: String {
         switch self {
-        case let .reporting(id, _): id
+        case let .reporting(id, _, _): id
         case let .adoptedSilent(id, _): id
         }
     }
@@ -54,17 +58,18 @@ public func equipmentRows(
         let id = device.deviceId
         accountedFor.insert(id)
         let role = roles[id] ?? ""
+        let name = device.displayName ?? id
         let row: EquipmentRow = if let frame = frames[id] {
-            .reporting(id: id, frame: frame)
+            .reporting(id: id, name: name, frame: frame)
         } else {
-            .adoptedSilent(id: id, name: device.displayName ?? id)
+            .adoptedSilent(id: id, name: name)
         }
         byRole[role, default: []].append(row)
     }
 
     for (id, frame) in frames where !accountedFor.contains(id) {
         let role = roles[id] ?? ""
-        byRole[role, default: []].append(.reporting(id: id, frame: frame))
+        byRole[role, default: []].append(.reporting(id: id, name: id, frame: frame))
     }
 
     let known = ["light", "heater", "pump", "doser", "outlet"]

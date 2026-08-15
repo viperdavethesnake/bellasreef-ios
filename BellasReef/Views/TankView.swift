@@ -602,8 +602,8 @@ struct EquipmentRowView: View {
 
     var body: some View {
         switch row {
-        case let .reporting(id, frame):
-            ChannelRow(id: id, frame: frame)
+        case let .reporting(id, name, frame):
+            ChannelRow(id: id, name: name, frame: frame)
         case let .adoptedSilent(_, name):
             AdoptedSilentRow(name: name)
         }
@@ -630,6 +630,7 @@ struct AdoptedSilentRow: View {
 
 struct ChannelRow: View {
     let id: String
+    let name: String
     let frame: Components.Schemas.StateFrame
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -648,7 +649,7 @@ struct ChannelRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(id).foregroundStyle(Theme.primaryText)
+                Text(name).foregroundStyle(Theme.primaryText)
                 Spacer()
                 Text("\(Int(duty * 100))%")
                     .font(Theme.value)
@@ -684,13 +685,13 @@ struct ChannelRow: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Self.spoken(id: id, duty: duty, frame: frame))
+        .accessibilityLabel(Self.spoken(name: name, duty: duty, frame: frame))
     }
 
     private static func spoken(
-        id: String, duty: Double, frame: Components.Schemas.StateFrame
+        name: String, duty: Double, frame: Components.Schemas.StateFrame
     ) -> String {
-        var parts = ["\(id), \(Int(duty * 100)) percent"]
+        var parts = ["\(name), \(Int(duty * 100)) percent"]
         if let override = frame.override {
             parts.append("held at \(Int(override.duty * 100)) percent")
         }

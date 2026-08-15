@@ -49,8 +49,18 @@ public final class DeviceCatalog {
     /// One place, so "friendly name everywhere" is a property of the app rather
     /// than a habit each view has to remember. A view that wants the id asks
     /// for the id.
+    ///
+    /// Checks `devices` (sensors and actuators alike) before `sensors`: the
+    /// audit log's device_id rows skew actuator-heavy (adoption, revocation,
+    /// commands), and `sensors` alone left every one of those falling back to
+    /// the raw id. `sensors` stays as the second lookup rather than dropping
+    /// out — it loads independently of `devices` in `refresh()`, so a caller
+    /// in the window before `devices` has landed still gets a name instead of
+    /// an id it didn't need to lose.
     public func name(for deviceId: String) -> String {
-        sensors.first { $0.deviceId == deviceId }?.displayName ?? deviceId
+        devices.first { $0.deviceId == deviceId }?.displayName
+            ?? sensors.first { $0.deviceId == deviceId }?.displayName
+            ?? deviceId
     }
 
     public func device(_ deviceId: String) -> Components.Schemas.DeviceView? {

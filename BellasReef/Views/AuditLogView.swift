@@ -42,7 +42,11 @@ struct AuditLogView: View {
         .task { await loadAudit() }
         .refreshable { await loadAudit() }
         .toolbar {
-            if case let .loaded(events) = load, !events.isEmpty {
+            // The menu is the only way to clear a filter, so it must survive
+            // a refresh that comes back empty while `selectedCategory` is
+            // still set — otherwise "No events in X" ships with no control
+            // to get back to "All".
+            if case let .loaded(events) = load, !events.isEmpty || selectedCategory != nil {
                 ToolbarItem(placement: .topBarTrailing) {
                     categoryMenu(events)
                 }
