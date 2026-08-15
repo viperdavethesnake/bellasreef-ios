@@ -47,14 +47,23 @@ public struct Palette: Sendable {
         surfaceRaised: RGB(0.110, 0.129, 0.165),
         primaryText: RGB(0.918, 0.937, 0.961),
         secondaryText: RGB(0.612, 0.655, 0.706),
-        // Lifted from (0.392, 0.435, 0.490) to clear WCAG AA for normal text.
+        // Lifted twice to clear WCAG AA for normal text, both times by the
+        // smallest bump along the same hue that passes.
         //
-        // The original measured **3.78:1** against `base` — fine for large
-        // text, a fail for the captions and sensor ids it was actually used on.
-        // Design brief §7.5 requires AA for all text and calls out the dimmed
-        // stale treatment by name: it must read as quieter, not as decoration.
-        // This is 4.60:1, the smallest bump along the same hue that passes.
-        tertiaryText: RGB(0.441, 0.489, 0.551),
+        // First from (0.392, 0.435, 0.490): that measured **3.78:1** against
+        // `base` — fine for large text, a fail for the captions and sensor ids
+        // it was actually used on. Design brief §7.5 requires AA for all text
+        // and calls out the dimmed stale treatment by name: it must read as
+        // quieter, not as decoration. The lift landed at 4.60:1 vs `base`.
+        //
+        // Then from (0.441, 0.489, 0.551), ruled by David 2026-08-14: the
+        // UX-1 contrast suite measured that value at **4.27:1** against
+        // `surface` — the row-card ground it also renders on — which the old
+        // vs-`base`-only check never saw. A 3% lift clears both grounds:
+        // 4.84:1 vs `base`, 4.50:1 vs `surface`. (vs `surfaceRaised` it is
+        // 4.05:1 — no text renders on that pair today; the suite scopes it
+        // out deliberately.)
+        tertiaryText: RGB(0.454, 0.504, 0.568),
         accent: RGB(0.153, 0.831, 0.808),
         attention: RGB(0.984, 0.749, 0.286),
         safety: RGB(0.937, 0.325, 0.314),

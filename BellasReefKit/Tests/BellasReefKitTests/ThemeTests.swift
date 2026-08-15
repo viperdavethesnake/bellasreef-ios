@@ -40,20 +40,9 @@ struct DarkPaletteContrastTests {
     @Test func textRampOnSurface() {
         #expect(contrast(p.primaryText, p.surface) >= 4.5)
         #expect(contrast(p.secondaryText, p.surface) >= 4.5)
-        // tertiaryText/surface is the pinned known shortfall below, not here.
-    }
-
-    /// Known shortfall, recorded rather than fixed: dark `tertiaryText` on
-    /// `surface` measures **4.27:1** — under AA's 4.5. The palette comment's
-    /// 4.60:1 claim is against `base` and holds exactly; the vs-`surface`
-    /// floor arrived with this suite (UX-1), and the dark values are law for
-    /// that task — flagged in its report, not silently "improved". Pinned to
-    /// the measured value so any drift in either colour re-opens the question
-    /// instead of hiding under a loosened floor. Clearing it is a one-line
-    /// tertiaryText bump awaiting a design ruling.
-    @Test func tertiaryOnSurfaceKnownShortfall() {
-        let measured = contrast(p.tertiaryText, p.surface)
-        #expect(measured >= 4.27 && measured < 4.5)
+        // Was a pinned 4.27:1 known shortfall until David's 2026-08-14 ruling
+        // bumped the dark value; now held to the same floor as its siblings.
+        #expect(contrast(p.tertiaryText, p.surface) >= 4.5)
     }
 
     /// Semantic colours used as text: stale badges, safety banners, silence
