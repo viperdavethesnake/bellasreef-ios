@@ -134,7 +134,9 @@ struct LightingCardsTests {
         let cards = lightingCards(devices: [device], frames: ["light-1": frame])
 
         #expect(cards.count == 1)
-        #expect(cards[0].hold == LightingCard.ActiveHold(duty: 0.6, remainingS: 1200))
+        #expect(cards[0].hold == LightingCard.ActiveHold(
+            id: "8f14e45f-ceea-467e-9575-6e3c8e9caeb2", duty: 0.6, remainingS: 1200
+        ))
     }
 
     @Test("cards are sorted like equipmentRows sorts — by device id, not display name")

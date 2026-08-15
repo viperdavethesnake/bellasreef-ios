@@ -14,11 +14,21 @@ public struct LightingCard: Equatable, Identifiable, Sendable {
     /// The hub's record of a live manual hold, carried on the state frame's
     /// `override` (`TankView`'s "Held at X% · remaining" already reads the
     /// same field — this just gives it a stable shape here too).
+    ///
+    /// `id` is `OverrideContext.id` off the same frame — required on the
+    /// wire (`components/schemas/OverrideContext` lists it non-optional), so
+    /// it is always present whenever `hold` is non-nil. That makes Release
+    /// unconditional: the id a card shows a hold with is the id that ends
+    /// it, regardless of which client placed it — there is no
+    /// "held by another device, can't release from here" case to invent,
+    /// because the wire never scopes an override to its creator.
     public struct ActiveHold: Equatable, Sendable {
+        public let id: String
         public let duty: Double
         public let remainingS: Double
 
-        public init(duty: Double, remainingS: Double) {
+        public init(id: String, duty: Double, remainingS: Double) {
+            self.id = id
             self.duty = duty
             self.remainingS = remainingS
         }
@@ -70,7 +80,7 @@ public func lightingCards(
                 name: device.displayName ?? device.deviceId,
                 reportedDuty: frame.map(reportedDuty(from:)),
                 hold: frame?.override.map {
-                    LightingCard.ActiveHold(duty: $0.duty, remainingS: $0.expiresInS)
+                    LightingCard.ActiveHold(id: $0.id, duty: $0.duty, remainingS: $0.expiresInS)
                 },
                 maxRuntimeS: device.maxRuntimeS
             )

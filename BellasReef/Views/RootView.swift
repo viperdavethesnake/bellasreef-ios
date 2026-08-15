@@ -21,9 +21,11 @@ struct RootView: View {
 
 /// The four tabs from design brief §3.
 ///
-/// Lighting and History are placeholders this pass — declared rather than
-/// hidden, so the shape of the app is visible and the brief's screen map is
-/// not quietly reinterpreted later.
+/// History remains a placeholder this pass — declared rather than hidden, so
+/// the shape of the app is visible and the brief's screen map is not quietly
+/// reinterpreted later. Lighting is real as of the 2026-08-15 manual-control
+/// spec (Feature 2): day curves are still out of scope (see that spec's "Out
+/// of scope"), but manual holds are not a placeholder any more.
 struct MainTabs: View {
     var body: some View {
         TabView {
@@ -31,11 +33,7 @@ struct MainTabs: View {
                 TankView()
             }
             Tab("Lighting", systemImage: "lightbulb.fill") {
-                ComingSoon(
-                    title: "Lighting",
-                    detail: "Day curves per channel, drag-to-edit control points, "
-                          + "and manual override with its auto-revert timer."
-                )
+                LightingView()
             }
             Tab("History", systemImage: "chart.bar.fill") {
                 HistoryTabView()
