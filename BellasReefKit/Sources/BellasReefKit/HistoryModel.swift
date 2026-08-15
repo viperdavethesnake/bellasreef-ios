@@ -118,15 +118,34 @@ public final class HistoryModel {
     public private(set) var gapFloor: TimeInterval?
 
     public var range: HistoryRange = .day {
-        didSet { Task { await load() } }
+        didSet { reload() }
     }
 
     private let client: HubClient
     private let catalog: DeviceCatalog
 
+    /// The in-flight load, if any. Lets a new request supersede an old one
+    /// instead of racing it.
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
+
     public init(client: HubClient, catalog: DeviceCatalog) {
         self.client = client
         self.catalog = catalog
+    }
+
+    /// Single-flight entry point: cancels whatever load is in progress and
+    /// starts a fresh one, so only the latest request ever writes `state`.
+    ///
+    /// `range.didSet` used to spawn an unstructured `Task { await load() }`
+    /// on every change, with nothing to stop two of them running at once — a
+    /// quick 1H→6H→1H flip left two requests in flight, and whichever
+    /// answered last won regardless of which range was actually selected.
+    /// Cancelling the loser here, combined with `load()` treating its own
+    /// cancellation as silence, is what makes that race harmless instead of
+    /// visible as a flicker to the wrong range or a spurious failure screen.
+    public func reload() {
+        loadTask?.cancel()
+        loadTask = Task { await load() }
     }
 
     public func load() async {
@@ -137,6 +156,10 @@ public final class HistoryModel {
 
         do {
             let view = try await client.history(from: start, to: end, buckets: range.buckets)
+            // A load cancelled between the request landing and here must not
+            // publish results for a range nobody is looking at anymore —
+            // `client.history` does not itself check cancellation.
+            try Task.checkCancellation()
             // `bucket_s` is what the hub actually used, not what was asked for.
             // Segmenting on the requested size would tear a series apart the
             // moment the cap changed the step.
@@ -155,8 +178,15 @@ public final class HistoryModel {
             episodes = view.episodes
             state = traces.contains { !$0.isEmpty } ? .loaded : .empty
         } catch {
+            // Our own cancellation is not news — a tab switch cancelling
+            // this `.task`, or `reload()` superseding it — so it leaves
+            // `state` exactly as it was and the next load gets a clean run.
+            // Finding, 2026-08-15: this used to render as a permanent
+            // failure screen carrying the raw transport dump, for a request
+            // the app itself cancelled while the server was healthy.
+            guard !HumanError.isCancellation(error) else { return }
             log.error("history load failed: \(String(describing: error))")
-            state = .failed("\(error)")
+            state = .failed(HumanError.describe(error))
         }
     }
 

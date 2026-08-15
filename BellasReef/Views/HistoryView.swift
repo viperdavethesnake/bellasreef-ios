@@ -32,11 +32,16 @@ struct HistoryTabView: View {
             .navigationTitle("History")
         }
         .task {
+            // Runs on every appearance, not only on creation: SwiftUI cancels
+            // this task when the tab is switched away from, and a cancelled
+            // load now leaves `state` untouched (HistoryModel.load()) rather
+            // than stamping a raw-dump failure — so the next visit re-runs
+            // this and self-heals instead of showing a permanent error for a
+            // load the app itself cancelled.
             if history == nil, let client = model.client, let catalog = model.catalog {
-                let made = HistoryModel(client: client, catalog: catalog)
-                history = made
-                await made.load()
+                history = HistoryModel(client: client, catalog: catalog)
             }
+            await history?.load()
         }
         .onChange(of: scenePhase) { _, phase in
             // REST data does not push; returning to the app is when the

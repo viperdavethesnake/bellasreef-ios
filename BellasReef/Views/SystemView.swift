@@ -2,7 +2,10 @@
 
 import BellasReefAPI
 import BellasReefKit
+import OSLog
 import SwiftUI
+
+private let log = Logger(subsystem: "com.bellasreef.app", category: "system")
 
 struct SystemView: View {
     @Environment(AppModel.self) private var model
@@ -453,7 +456,8 @@ struct SystemView: View {
         do {
             try await model.client?.revoke(clientId: client.id)
         } catch {
-            revokeProblem = "\(error)"
+            log.error("revoke failed: \(String(describing: error))")
+            revokeProblem = HumanError.describe(error)
         }
         await loadClients()
     }
@@ -463,7 +467,8 @@ struct SystemView: View {
         do {
             _ = try await model.client?.unbind(deviceId: device.deviceId)
         } catch {
-            unadoptProblem = "\(error)"
+            log.error("unadopt failed: \(String(describing: error))")
+            unadoptProblem = HumanError.describe(error)
         }
         await loadHardware()
     }
