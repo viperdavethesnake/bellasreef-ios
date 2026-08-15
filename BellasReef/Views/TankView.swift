@@ -69,7 +69,7 @@ struct TankView: View {
                     )
                 }
 
-                ActuatorSections(monitor: monitor)
+                ActuatorSections(monitor: monitor, catalog: catalog)
             }
             .padding(.horizontal, 20)
             .padding(.top, 8)
@@ -397,6 +397,12 @@ struct PrimaryReading: View {
                     }
                     .padding(.top, 6)
                     .accessibilityHidden(true)
+                } else {
+                    Text("trend: collecting…")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.tertiaryText)
+                        .padding(.top, 6)
+                        .accessibilityHidden(true)
                 }
             }
             .accessibilityElement(children: .combine)
@@ -529,33 +535,14 @@ struct Sparkline: View {
 /// them can convince somebody that a doser is a light.
 struct ActuatorSections: View {
     let monitor: TankMonitor
+    let catalog: DeviceCatalog
 
-    private struct Channel: Identifiable {
-        let id: String
-        let frame: Components.Schemas.StateFrame
-    }
-
-    private var channels: [Channel] {
-        monitor.channels
-            .sorted { $0.key < $1.key }
-            .map { Channel(id: $0.key, frame: $0.value) }
-    }
-
-    /// Sections in husbandry order, with anything unrecognised after them.
-    private var sections: [(role: String, title: String, channels: [Channel])] {
-        let grouped = Dictionary(grouping: channels) { monitor.roles[$0.id] ?? "" }
-        let known = ["light", "heater", "pump", "doser", "outlet"]
-
-        var out: [(role: String, title: String, channels: [Channel])] = []
-        for role in known {
-            guard let items = grouped[role], !items.isEmpty else { continue }
-            out.append((role: role, title: Self.title(for: role), channels: items))
-        }
-        for (role, items) in grouped.sorted(by: { $0.key < $1.key })
-        where !known.contains(role) && !items.isEmpty {
-            out.append((role: role, title: Self.title(for: role), channels: items))
-        }
-        return out
+    /// Husbandry-ordered sections, merged from the registry and the stream by
+    /// `equipmentRows` — grouping/ordering is that function's job, not
+    /// duplicated here. This view only adds the operator-facing titles.
+    private var sections: [(role: String, title: String, rows: [EquipmentRow])] {
+        equipmentRows(devices: catalog.devices, frames: monitor.channels, roles: monitor.roles)
+            .map { (role: $0.role, title: Self.title(for: $0.role), rows: $0.rows) }
     }
 
     /// The contract's roles in the operator's words. Anything else keeps its own
@@ -575,14 +562,18 @@ struct ActuatorSections: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            if channels.isEmpty {
+            if sections.isEmpty {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("Equipment")
                         .font(Theme.sectionTitle)
                         .foregroundStyle(Theme.secondaryText)
-                    // Empty state (§7.1), distinguished from loading: the socket
-                    // is up and nothing has reported.
-                    Text("No channels reporting yet")
+                    // Two distinct emptinesses (UX-3): before the registry has
+                    // loaded, we do not yet know whether there is equipment to
+                    // show, so this stays the old, more tentative wording. Once
+                    // `catalog` has loaded and confirms there is truly nothing
+                    // adopted, the copy says that plainly instead of implying a
+                    // stream that just hasn't spoken yet.
+                    Text(catalog.state == .loaded ? "No equipment adopted yet" : "No channels reporting yet")
                         .font(Theme.caption)
                         .foregroundStyle(Theme.secondaryText)
                 }
@@ -594,8 +585,8 @@ struct ActuatorSections: View {
                         .font(Theme.sectionTitle)
                         .foregroundStyle(Theme.secondaryText)
 
-                    ForEach(section.channels) { channel in
-                        ChannelRow(id: channel.id, frame: channel.frame)
+                    ForEach(section.rows) { row in
+                        EquipmentRowView(row: row)
                     }
                 }
             }
@@ -604,8 +595,42 @@ struct ActuatorSections: View {
     }
 }
 
+/// One row in the merged Equipment list: either a live state frame, or an
+/// adopted actuator the stream has not spoken for yet.
+struct EquipmentRowView: View {
+    let row: EquipmentRow
+
+    var body: some View {
+        switch row {
+        case let .reporting(id, name, frame):
+            ChannelRow(id: id, name: name, frame: frame)
+        case let .adoptedSilent(_, name):
+            AdoptedSilentRow(name: name)
+        }
+    }
+}
+
+/// An adopted actuator with no state frame yet. No duty bar and no
+/// percentage — inventing 0% would claim a state we do not have.
+struct AdoptedSilentRow: View {
+    let name: String
+
+    var body: some View {
+        HStack {
+            Text(name).foregroundStyle(Theme.primaryText)
+            Spacer()
+            Text("no state yet")
+                .font(Theme.caption)
+                .foregroundStyle(Theme.tertiaryText)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(name), no state yet")
+    }
+}
+
 struct ChannelRow: View {
     let id: String
+    let name: String
     let frame: Components.Schemas.StateFrame
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -624,7 +649,7 @@ struct ChannelRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack {
-                Text(id).foregroundStyle(Theme.primaryText)
+                Text(name).foregroundStyle(Theme.primaryText)
                 Spacer()
                 Text("\(Int(duty * 100))%")
                     .font(Theme.value)
@@ -660,13 +685,13 @@ struct ChannelRow: View {
             }
         }
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Self.spoken(id: id, duty: duty, frame: frame))
+        .accessibilityLabel(Self.spoken(name: name, duty: duty, frame: frame))
     }
 
     private static func spoken(
-        id: String, duty: Double, frame: Components.Schemas.StateFrame
+        name: String, duty: Double, frame: Components.Schemas.StateFrame
     ) -> String {
-        var parts = ["\(id), \(Int(duty * 100)) percent"]
+        var parts = ["\(name), \(Int(duty * 100)) percent"]
         if let override = frame.override {
             parts.append("held at \(Int(override.duty * 100)) percent")
         }

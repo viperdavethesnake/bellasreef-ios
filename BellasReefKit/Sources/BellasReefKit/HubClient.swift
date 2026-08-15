@@ -194,6 +194,26 @@ public actor HubClient {
         }
     }
 
+    // MARK: Audit
+
+    /// The audit trail: who did what, and when.
+    ///
+    /// `category` filters server-side when given; `nil` asks for everything.
+    /// The hub does not document result ordering, so callers that need newest
+    /// first must sort the page themselves rather than trust the wire order.
+    public func audit(
+        limit: Int? = nil, category: String? = nil
+    ) async throws -> [Components.Schemas.AuditEvent] {
+        switch try await client.listAudit(query: .init(limit: limit, category: category)) {
+        case let .ok(response): return try response.body.json
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the audit query")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("audit returned \(statusCode)")
+        }
+    }
+
     // MARK: Capabilities and adoption
 
     /// What the hardware can offer, and what has been claimed. Tier one of

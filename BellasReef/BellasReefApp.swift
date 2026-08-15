@@ -34,9 +34,10 @@ struct BellasReefApp: App {
                 // The model needs preferences too — the primary-sensor choice
                 // is read while assembling the Tank tab, not just in Settings.
                 .task { model.preferences = preferences }
-                // Dark is primary (design brief §2). Declared here as well as in
-                // Info.plist so previews and the simulator agree with the device.
-                .preferredColorScheme(.dark)
+                // No .preferredColorScheme: the app follows the system
+                // appearance (UX-1). Dark stays primary by design intent —
+                // Theme resolves an unspecified trait to the dark palette —
+                // not by pin.
                 .tint(Theme.accent)
         }
     }

@@ -54,6 +54,19 @@ struct SystemView: View {
                 hardware
 
                 Section {
+                    NavigationLink {
+                        AuditLogView()
+                    } label: {
+                        Text("Audit log")
+                    }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("audit-log")
+                } footer: {
+                    Text("The hub's append-only record of who did what — every pairing, "
+                         + "adoption and revocation it has recorded.")
+                }
+
+                Section {
                     Picker("Temperature", selection: $preferences.temperatureUnit) {
                         ForEach(TemperatureUnitPreference.allCases) { unit in
                             Text(unit.label).tag(unit)
