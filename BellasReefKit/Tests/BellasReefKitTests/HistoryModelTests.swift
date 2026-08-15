@@ -110,6 +110,79 @@ struct HistoryModelTests {
             Issue.record("the superseded load's cancellation surfaced as a failure: \(why)")
         }
     }
+
+    /// The exact race from the finding: `.refreshable` calls `refresh()` at
+    /// the current range and awaits it — same as pull-to-refresh at 1H — and
+    /// while that request is still in flight, `range` flips (to `.week`,
+    /// same as picking 7D), which calls `reload()`. Before both went through
+    /// the same tracked `loadTask`, neither could cancel the other, so
+    /// whichever response happened to arrive last won regardless of which
+    /// range was actually selected. The fix means the range flip's request —
+    /// fired second — is the one that must survive.
+    @Test("a range change wins over a slower in-flight refresh at the old range")
+    func laterRangeWinsOverSlowerRefresh() async {
+        let started = Started()
+        let callIndex = CallIndex()
+        let transport = StubTransport { operation, _, _ in
+            if operation == "mintToken" {
+                return (200, Data(#"{"access_token":"jwt","expires_in":900}"#.utf8))
+            }
+            // First call in is the pull-to-refresh at the old range: it never
+            // answers, standing in for "still in flight when the range
+            // changes".
+            guard await callIndex.next() > 1 else {
+                await started.mark()
+                try await Task.sleep(nanoseconds: .max)
+                return (200, Data())
+            }
+            // Second call in is the range flip's request: answered at once,
+            // with a series distinct enough to prove whose data landed.
+            return (200, historyPayload(deviceId: "week-device", metric: "temp"))
+        }
+        let client = HubClient(
+            hub: historyHub, tokens: MemoryCredentials(token: "rt"), transport: transport
+        )
+        let model = HistoryModel(client: client, catalog: DeviceCatalog(client: client))
+
+        // `.refreshable`'s own call: awaited concurrently, same as the view
+        // does, so it must not block this test while it's stuck in flight.
+        async let refreshing: Void = model.refresh()
+        await started.wait()
+
+        // The range flip `.refreshable` was racing against.
+        model.range = .week
+        await refreshing
+
+        // `refreshing` only resolves the superseded call's own task — once
+        // cancelled, it returns quickly, same as the real `.refreshable`
+        // spinner would stop. It says nothing about whether `reload()`'s
+        // replacement task (which nobody here awaits, same as the view
+        // never awaits `reload()`) has finished writing `state` yet, so give
+        // it a moment before asserting what actually landed.
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        #expect(model.traces.map(\.id) == ["week-device/temp"])
+    }
+}
+
+/// One series, one bucket, named distinctly enough that a test can tell
+/// whose response actually landed in `state`.
+private func historyPayload(deviceId: String, metric: String) -> Data {
+    Data("""
+    {"start":"2026-01-01T00:00:00Z","end":"2026-01-01T01:00:00Z","bucket_s":60,
+     "series":[{"device_id":"\(deviceId)","metric":"\(metric)","unit":"degC",
+                 "buckets":[{"at":"2026-01-01T00:01:00Z","minimum":1,"average":1,"maximum":1}]}],
+     "episodes":[]}
+    """.utf8)
+}
+
+/// Thread-safe call counter: `StubTransport`'s handler is `@Sendable` and
+/// this test needs to tell the first `history` call apart from the second.
+private actor CallIndex {
+    private var count = 0
+    func next() -> Int {
+        count += 1
+        return count
+    }
 }
 
 /// Signals once the in-flight request under test has actually begun, so the

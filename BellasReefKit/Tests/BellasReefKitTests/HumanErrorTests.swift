@@ -56,6 +56,23 @@ struct HumanErrorTests {
         #expect(HumanError.isCancellation(wrapped))
     }
 
+    /// The shape URLSession actually throws when a task is cancelled
+    /// mid-request — `URLError(.cancelled)`, not `CancellationError` — is
+    /// what a real `.task` cancellation during `client.history(...)` wraps
+    /// as. `wrappedClientErrorIsCancellation` above proves the *unwrap*
+    /// works at all; this proves it works for the error shape URLSession's
+    /// async APIs are documented to actually produce.
+    @Test("a URLError(.cancelled) wrapped in ClientError is cancellation")
+    func wrappedClientErrorWithURLErrorCancelledIsCancellation() {
+        let wrapped = ClientError(
+            operationID: "history",
+            operationInput: "unused" as any Sendable,
+            causeDescription: "cancelled",
+            underlyingError: URLError(.cancelled)
+        )
+        #expect(HumanError.isCancellation(wrapped))
+    }
+
     @Test("a real failure wrapped in ClientError is not cancellation")
     func wrappedClientErrorRealFailureIsNotCancellation() {
         let wrapped = ClientError(

@@ -133,22 +133,53 @@ public final class HistoryModel {
         self.catalog = catalog
     }
 
-    /// Single-flight entry point: cancels whatever load is in progress and
-    /// starts a fresh one, so only the latest request ever writes `state`.
+    /// Cancels whatever load is in progress and starts a tracked replacement.
     ///
-    /// `range.didSet` used to spawn an unstructured `Task { await load() }`
-    /// on every change, with nothing to stop two of them running at once — a
-    /// quick 1H→6H→1H flip left two requests in flight, and whichever
-    /// answered last won regardless of which range was actually selected.
-    /// Cancelling the loser here, combined with `load()` treating its own
-    /// cancellation as silence, is what makes that race harmless instead of
-    /// visible as a flicker to the wrong range or a spurious failure screen.
-    public func reload() {
+    /// The one place that touches `loadTask`, behind both `reload()` and
+    /// `refresh()`. Every view entry point — range change, retry, returning
+    /// to the foreground, pull-to-refresh, the initial `.task` — goes
+    /// through one of those two, so no matter which fires last, it is the
+    /// one whose result survives; an in-flight sibling gets cancelled here
+    /// before it ever gets the chance to publish.
+    ///
+    /// Finding, 2026-08-15 (second pass): `range.didSet` alone spawning
+    /// `Task { await load() }` was not enough — `.refreshable`, the retry
+    /// button and the `scenePhase` handler each called `load()` in their own
+    /// untracked `Task`, so a pull-to-refresh at 1H racing a flip to 7D could
+    /// still publish stale 1H data over the 7D result: `checkCancellation()`
+    /// never fires for a task nothing ever cancels. `load()` is no longer
+    /// `public` for exactly this reason — the compiler is what now enforces
+    /// that every caller goes through the tracked path.
+    private func supersede() -> Task<Void, Never> {
         loadTask?.cancel()
-        loadTask = Task { await load() }
+        let task = Task { await load() }
+        loadTask = task
+        return task
     }
 
-    public func load() async {
+    /// Fire-and-forget single-flight entry point: range changes, retry, and
+    /// returning to the foreground don't own a spinner to wait on.
+    public func reload() {
+        _ = supersede()
+    }
+
+    /// Awaitable single-flight entry point: pull-to-refresh's `.refreshable`
+    /// needs to know when the load actually finished (so its spinner stops),
+    /// and the initial `.task` awaits this the same way. If a `reload()`
+    /// races in and supersedes it, this still returns cleanly — `load()`'s
+    /// own cancellation handling makes that a clean return, not a hang.
+    public func refresh() async {
+        await supersede().value
+    }
+
+    /// Not `public`: every caller reaches this through `reload()`/`refresh()`
+    /// so the single-flight guarantee above cannot be bypassed by a new view
+    /// entry point calling `load()` directly, the way four of them once did.
+    /// Kit tests call this directly to exercise cancellation-transparency
+    /// and error formatting in isolation, without the timing a full
+    /// `reload()`/`refresh()` race would need — `@testable import` reaches
+    /// `internal`, which is what makes that legitimate rather than a leak.
+    func load() async {
         if traces.isEmpty { state = .loading }
         let end = Date()
         let start = end.addingTimeInterval(-range.duration)

@@ -38,15 +38,24 @@ struct HistoryTabView: View {
             // than stamping a raw-dump failure — so the next visit re-runs
             // this and self-heals instead of showing a permanent error for a
             // load the app itself cancelled.
+            //
+            // `refresh()`, not `load()`: this — along with `.refreshable`,
+            // the retry button and the `scenePhase` handler below — used to
+            // call `load()` directly in its own untracked `Task`, so none of
+            // the four could ever cancel another. A pull-to-refresh at 1H
+            // racing a range flip to 7D could publish stale 1H data over the
+            // 7D result. Every entry point now goes through `HistoryModel`'s
+            // single tracked `loadTask` (`reload()`/`refresh()`), which is
+            // also why `load()` itself is no longer reachable from here.
             if history == nil, let client = model.client, let catalog = model.catalog {
                 history = HistoryModel(client: client, catalog: catalog)
             }
-            await history?.load()
+            await history?.refresh()
         }
         .onChange(of: scenePhase) { _, phase in
             // REST data does not push; returning to the app is when the
             // operator expects it to be current.
-            if phase == .active { Task { await history?.load() } }
+            if phase == .active { history?.reload() }
         }
     }
 
@@ -62,7 +71,7 @@ struct HistoryTabView: View {
                 case .idle, .loading:
                     Loading()
                 case let .failed(why):
-                    Failure(why: why) { Task { await history.load() } }
+                    Failure(why: why) { history.reload() }
                 case .empty:
                     Empty(range: history.range)
                 case .loaded:
@@ -75,7 +84,7 @@ struct HistoryTabView: View {
             .padding(.vertical, 16)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .refreshable { await history.load() }
+        .refreshable { await history.refresh() }
     }
 }
 
