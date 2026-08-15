@@ -29,6 +29,8 @@ public enum AuditPhrase {
         case "pair.approved":      return "Approved a pairing"
         case "pair.tofu_granted":  return "Paired the first device"
         case "pair.code_granted":  return "Paired with the setup code"
+        case "pair.requested":     return "Asked to pair"
+        case "pair.window_opened": return "Opened a pairing window"
         case "pair.collected":     return "Pairing request collected"
         case "pair.denied":        return "Denied a pairing request"
         case "pair.no_approver":   return "Pairing attempted with nobody to approve"

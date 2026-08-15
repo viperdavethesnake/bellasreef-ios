@@ -50,6 +50,16 @@ struct AuditPhraseTests {
                 == "Paired with the setup code")
     }
 
+    /// IMPORTANT-3: two events the backend emits today that `AuditPhrase` had
+    /// no case for, falling through to the raw action string.
+    @Test("pairing lifecycle actions read as sentences")
+    func pairingLifecycleActionsReadAsSentences() {
+        #expect(AuditPhrase.title(action: "pair.requested", deviceName: nil)
+                == "Asked to pair")
+        #expect(AuditPhrase.title(action: "pair.window_opened", deviceName: nil)
+                == "Opened a pairing window")
+    }
+
     @Test("pairing failure and near-miss actions read as sentences")
     func pairingFailureActionsReadAsSentences() {
         #expect(AuditPhrase.title(action: "pair.collected", deviceName: nil)

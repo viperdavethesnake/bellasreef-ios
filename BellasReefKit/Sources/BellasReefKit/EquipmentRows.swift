@@ -31,7 +31,11 @@ public enum EquipmentRow: Equatable, Identifiable {
 /// `devices` and `frames` disagree by design: the registry is REST truth
 /// fetched on open/foreground, the frame dictionary is only ever what has
 /// actually arrived over the socket since connect. Every adopted actuator
-/// device (`actuator_class != nil`) appears exactly once — `.reporting` when
+/// device (`actuator_class != nil` **and** `adopted == true`) appears exactly
+/// once — a detached actuator still carries its `actuatorClass` (unbind is
+/// not a delete; see `SystemView.detachedRow`), so `actuatorClass != nil`
+/// alone lets a released channel keep showing as live equipment on the tab
+/// that commands it. `.reporting` when
 /// `frames` has an entry keyed by its `device_id` (that is the wire's
 /// `actuator_id`; hardware-io registers `actuator_id = device_id`, see
 /// `TankMonitor.channels`), `.adoptedSilent` otherwise. A frame whose key
@@ -51,7 +55,7 @@ public func equipmentRows(
     var accountedFor: Set<String> = []
 
     let adopted = devices
-        .filter { $0.actuatorClass != nil }
+        .filter { $0.actuatorClass != nil && $0.adopted == true }
         .sorted { $0.deviceId < $1.deviceId }
 
     for device in adopted {
