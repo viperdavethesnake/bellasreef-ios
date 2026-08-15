@@ -140,7 +140,7 @@ private struct LightingCardView: View {
 
     /// Percent, 0...100 — the *proposed* value. Seeded once from the hub's
     /// reported duty at first appearance and never re-synced from later
-    /// frames: the truth line (`card.reportedDuty`/`effectiveHold`) is what
+    /// frames: the truth line (`card.reportedDuty`/`currentHold()`) is what
     /// renders hub state, and this must stay visibly the operator's own
     /// pending choice, not something the stream can silently overwrite out
     /// from under a drag in progress.
@@ -157,16 +157,25 @@ private struct LightingCardView: View {
 
     /// A Hold's own grant response, shown immediately rather than waiting on
     /// the next state frame (review, 2026-08-15: `HoldOutcome.granted`
-    /// carries the whole created override for exactly this). Superseded the
-    /// moment `card.hold` — the frame's own account — is non-nil; see
-    /// `effectiveHold`.
+    /// carries the whole created override for exactly this). Cleared once a
+    /// frame speaks for this device at all (`onChange(of: card.hold)`,
+    /// below) and, independently, treated as absent by `effectiveHold` once
+    /// its own `expiresAt` passes — a round-2 review fix (C1): without the
+    /// expiry check, a hold that expires on the hub while the stream stays
+    /// quiet would render as a live "under a minute left" forever, since
+    /// nothing was left to ever clear it.
     @State private var optimisticHold: LightingCard.ActiveHold?
-    /// Override ids this card has locally released. A frame can lag a
-    /// release by one beat, and without this the stale frame would show the
-    /// just-released hold again with a live Release button — the "second
-    /// tap isn't silently possible" requirement. Cleared implicitly: once a
-    /// fresher frame reports a *different* (or no) override, the id this
-    /// holds no longer matches anything `effectiveHold` would show anyway.
+    /// Override ids `effectiveHold` (kit) must treat as stale regardless of
+    /// what the frame or the optimistic copy still say. Two distinct
+    /// sources feed this, both round-2 review fixes:
+    /// - `release(overrideId:)` inserts an id this client just released, so
+    ///   a frame that lags the release by one beat can't make an
+    ///   already-released hold look re-releasable ("second tap isn't
+    ///   silently possible") — C1.
+    /// - `hold()` seeds this with whatever hold the frame currently shows
+    ///   *before* a fresh grant, because a same-duty re-hold supersedes on
+    ///   the backend but the engine's deadband can leave the old hold in
+    ///   the next several frames with nothing new to publish — I1.
     @State private var releasedIDs: Set<String> = []
     /// The hold pending confirmation, if the operator has tapped Release —
     /// §7.4's standard destructive-confirm pattern (review, 2026-08-15:
@@ -210,17 +219,16 @@ private struct LightingCardView: View {
         _customMinutesText = State(initialValue: String(max(1, min(capMinutes ?? 60, 60))))
     }
 
-    /// The hold this card actually shows: the frame's own account when the
-    /// hub has one, falling back to this card's own optimistic grant
-    /// otherwise (review, 2026-08-15). Frame truth always wins when present
-    /// — the one exception is an id this card has itself just released,
-    /// which stays hidden even if a lagging frame still reports it, so a
-    /// confirmed release can never look re-releasable.
-    private var effectiveHold: LightingCard.ActiveHold? {
-        if let frameHold = card.hold {
-            return releasedIDs.contains(frameHold.id) ? nil : frameHold
-        }
-        return optimisticHold
+    /// This card's own call into the pure `effectiveHold(...)` precedence
+    /// function (kit) — `now` defaults to the call-time instant for the
+    /// non-ticking uses (the accessibility label); the visible countdown
+    /// passes a `TimelineView`'s tick instead, below, which is what lets an
+    /// expired optimistic hold clear itself without waiting on a new frame
+    /// or any other `@State` change (review round 2, 2026-08-15 — C1).
+    private func currentHold(now: Date = Date()) -> LightingCard.ActiveHold? {
+        effectiveHold(
+            frameHold: card.hold, optimisticHold: optimisticHold, releasedIDs: releasedIDs, now: now
+        )
     }
 
     var body: some View {
@@ -235,12 +243,15 @@ private struct LightingCardView: View {
             .accessibilityElement(children: .combine)
             .accessibilityLabel(truthAccessibilityLabel)
 
-            if let hold = effectiveHold {
-                // Ticks live off `Date()` rather than a number frozen at
-                // frame receipt (review, 2026-08-15): a static remaining-
-                // seconds count freezes during a quiet steady hold, which
-                // reads as the countdown having stopped.
-                TimelineView(.periodic(from: .now, by: 5)) { context in
+            // The TimelineView wraps the *presence* decision, not just the
+            // countdown text (review round 2, 2026-08-15 — C1): an
+            // optimistic hold that outlives its own `expiresAt` with no
+            // fresher frame ever arriving (a quiet stream at exactly the
+            // wrong moment) must stop rendering once real time passes it,
+            // and nothing but a live clock tick can notice that on its own
+            // — no `@State` changes when nothing else happens.
+            TimelineView(.periodic(from: .now, by: 5)) { context in
+                if let hold = currentHold(now: context.date) {
                     HStack(alignment: .center) {
                         Label(
                             "Held at \(Int(hold.duty * 100))% · "
@@ -256,10 +267,11 @@ private struct LightingCardView: View {
                             .disabled(submitting)
                             .accessibilityIdentifier("lighting-release-\(card.id)")
                     }
+                    // 44pt minimum touch target on the row (§7.4), same
+                    // idiom as SystemView's Revoke row — the label text
+                    // stays small.
+                    .frame(minHeight: 44)
                 }
-                // 44pt minimum touch target on the row (§7.4), same idiom as
-                // SystemView's Revoke row — the label text stays small.
-                .frame(minHeight: 44)
             }
 
             VStack(alignment: .leading, spacing: 4) {
@@ -310,7 +322,16 @@ private struct LightingCardView: View {
         .onChange(of: proposedDuty) { problem = nil }
         .onChange(of: durationChoice) { problem = nil }
         .onChange(of: customMinutesText) { problem = nil }
-        .onChange(of: card.hold) { problem = nil }
+        .onChange(of: card.hold) { _, newValue in
+            problem = nil
+            // Retire the optimistic copy the moment a frame speaks for this
+            // device at all (review round 2, 2026-08-15 — C1): once the
+            // frame has an account, `effectiveHold` prefers it regardless,
+            // so this is belt-and-braces against the stale optimistic value
+            // surviving to be wrongly consulted later, after the frame goes
+            // quiet again for real (the hold's natural expiry).
+            if newValue != nil { optimisticHold = nil }
+        }
         // §7.4 standard destructive-confirm pattern, the same shape
         // SystemView uses for Revoke/Unadopt/Clear (ruled 2026-08-15: this
         // wins over this file's earlier no-confirm reading — control-red
@@ -367,7 +388,7 @@ private struct LightingCardView: View {
     private var truthAccessibilityLabel: String {
         var parts = [card.name]
         parts.append(card.reportedDuty.map { "\(Int($0 * 100)) percent" } ?? "no state yet")
-        if let hold = effectiveHold {
+        if let hold = currentHold() {
             parts.append("held at \(Int(hold.duty * 100)) percent")
         }
         return parts.joined(separator: ", ")
@@ -461,7 +482,15 @@ private struct LightingCardView: View {
                 optimisticHold = LightingCard.ActiveHold(
                     id: overrideView.id, duty: overrideView.duty, expiresAt: overrideView.expiresAt
                 )
-                releasedIDs.removeAll()
+                // Seed `releasedIDs` with whatever hold the frame currently
+                // shows, rather than clearing it (review round 2, 2026-08-15
+                // — I1): a re-hold at the SAME duty is a supersede on the
+                // backend, but the engine's deadband can mean no new frame
+                // is ever published to reflect it, so `card.hold` (if any)
+                // is now a stale id — `effectiveHold` must treat it as
+                // suppressed so the fresh optimistic grant (correct id,
+                // correct deadline) is what actually shows.
+                releasedIDs = Set(card.hold.map { [$0.id] } ?? [])
                 successPulse += 1
             case .notCommandable:
                 problem = .message("This light is observe-only and can't be commanded from here.")

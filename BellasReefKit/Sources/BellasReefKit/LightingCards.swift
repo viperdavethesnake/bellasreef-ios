@@ -117,6 +117,46 @@ public enum DurationPreset: Double, CaseIterable, Sendable {
     case eightHours = 28_800
 }
 
+/// The hold a Lighting card actually shows, reconciling the frame's own
+/// account against a client's local optimistic state — a grant just placed,
+/// or ids this client already knows are stale. Pure and extracted (review
+/// round 2, 2026-08-15) after two bugs were found in this exact seam when it
+/// lived as a view-local computed property: pinning the precedence here lets
+/// each scenario carry its own test rather than only being reasoned about
+/// against `@State`.
+///
+/// Precedence:
+/// 1. The frame's own hold, unless its id is in `releasedIDs` — either
+///    genuinely released by this client, or superseded by a newer local
+///    grant at the same duty. The engine's deadband can leave the frame
+///    reporting the *previous* hold for a while after a re-hold, because a
+///    same-duty re-hold produces no new telemetry to publish; `releasedIDs`
+///    is how a caller tells this function "that id is stale, don't trust it
+///    even though the frame still carries it."
+/// 2. Otherwise the optimistic hold, unless it is itself in `releasedIDs`,
+///    or has already expired as of `now`. An unexpired optimistic grant is
+///    the honest stand-in while the frame hasn't caught up yet; one that has
+///    passed its own deadline must not go on rendering as a live hold just
+///    because no fresher frame ever arrived to say otherwise (a quiet
+///    stream, or a hold that expired for real) — a caller ticking `now`
+///    forward (e.g. a `TimelineView`) is what turns this into a live
+///    countdown that eventually clears itself rather than a phantom.
+/// 3. Otherwise nothing is held.
+public func effectiveHold(
+    frameHold: LightingCard.ActiveHold?,
+    optimisticHold: LightingCard.ActiveHold?,
+    releasedIDs: Set<String>,
+    now: Date
+) -> LightingCard.ActiveHold? {
+    if let frameHold, !releasedIDs.contains(frameHold.id) {
+        return frameHold
+    }
+    if let optimisticHold, !releasedIDs.contains(optimisticHold.id), optimisticHold.expiresAt > now {
+        return optimisticHold
+    }
+    return nil
+}
+
 /// Presets legal for a target whose `max_runtime_s` is `maxRuntimeS`.
 ///
 /// `nil` means the hub reported no ceiling — every preset is offered rather

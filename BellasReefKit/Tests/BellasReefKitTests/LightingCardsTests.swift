@@ -168,3 +168,77 @@ struct LightingCardsTests {
         #expect(allowedDurations(maxRuntimeS: 600).isEmpty)
     }
 }
+
+/// `effectiveHold(...)` (LightingCards.swift) is the precedence decision the
+/// Lighting tab's card view makes every render: frame vs. a client's own
+/// optimistic grant vs. ids it already knows are stale. Extracted to here
+/// and pinned by test (review round 2, 2026-08-15) after two bugs were found
+/// in this exact seam while it lived as a view-local computed property —
+/// C1 (a naturally-expiring hold rendering forever as a phantom) and I1 (a
+/// same-duty re-hold's stale frame outranking the fresh grant that actually
+/// superseded it).
+@Suite("Effective hold precedence")
+struct EffectiveHoldTests {
+    static let now = Date(timeIntervalSince1970: 1_786_343_122)
+
+    private static func hold(
+        id: String, duty: Double = 0.5, expiresIn seconds: Double
+    ) -> LightingCard.ActiveHold {
+        .init(id: id, duty: duty, expiresAt: now.addingTimeInterval(seconds))
+    }
+
+    @Test("a frame with a hold wins over an optimistic one, even when both are present")
+    func frameSpeaksRetiresOptimistic() {
+        let frameHold = Self.hold(id: "frame-id", expiresIn: 600)
+        let optimistic = Self.hold(id: "optimistic-id", expiresIn: 3600)
+
+        let result = effectiveHold(
+            frameHold: frameHold, optimisticHold: optimistic, releasedIDs: [], now: Self.now
+        )
+
+        #expect(result == frameHold)
+    }
+
+    @Test("an optimistic hold past its own deadline is absent, not a phantom")
+    func expiredOptimisticIsAbsent() {
+        let optimistic = Self.hold(id: "optimistic-id", expiresIn: -1)
+
+        let result = effectiveHold(
+            frameHold: nil, optimisticHold: optimistic, releasedIDs: [], now: Self.now
+        )
+
+        #expect(result == nil)
+    }
+
+    @Test("a same-duty re-hold hides the stale frame hold and shows the fresh optimistic one")
+    func supersedeHidesOldShowsNew() {
+        // The engine's deadband can leave the frame reporting the previous
+        // hold for a while after a same-duty re-hold — `hold()` in the view
+        // seeds `releasedIDs` with exactly the id below to compensate.
+        let staleFrameHold = Self.hold(id: "old-id", expiresIn: 60)
+        let freshOptimistic = Self.hold(id: "new-id", expiresIn: 3600)
+
+        let result = effectiveHold(
+            frameHold: staleFrameHold, optimisticHold: freshOptimistic,
+            releasedIDs: ["old-id"], now: Self.now
+        )
+
+        #expect(result == freshOptimistic)
+    }
+
+    @Test("an id this card has released is suppressed even if the frame still carries it")
+    func releasedIDIsSuppressed() {
+        let gone = Self.hold(id: "gone-id", expiresIn: 600)
+
+        let result = effectiveHold(
+            frameHold: gone, optimisticHold: gone, releasedIDs: ["gone-id"], now: Self.now
+        )
+
+        #expect(result == nil)
+    }
+
+    @Test("no frame and no optimistic hold is simply nothing held")
+    func nothingHeldIsNil() {
+        #expect(effectiveHold(frameHold: nil, optimisticHold: nil, releasedIDs: [], now: Self.now) == nil)
+    }
+}
