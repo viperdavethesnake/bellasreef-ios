@@ -18,6 +18,17 @@ public actor HubClient {
         case pending(PendingPairing)
         /// Every client is revoked and no window is open — nobody can approve.
         case needsRecoveryCLI
+        /// Setup mode, and the code was missing or wrong. 422 — but the
+        /// 3.7.0 contract carries no reason body for that response (it also
+        /// covers a rejected `client_name` on the plain flow, which shares
+        /// the same status and shape), so this is a distinct case rather
+        /// than a thrown `.rejected(reason)`: the caller supplies its own
+        /// copy, never one read off the wire. Only returned when this call
+        /// carried a `setupCode` — see `pair(clientName:setupCode:)`.
+        case codeRejected
+        /// Too many failed setup-code attempts, globally throttled. 429 —
+        /// only reachable when this call carried a `setupCode`.
+        case throttled
     }
 
     /// The 202 body, whole.
@@ -79,6 +90,13 @@ public actor HubClient {
         /// The hub understood the request and refused it, with a reason worth
         /// showing verbatim.
         case rejected(String)
+        /// Too many failed setup-code attempts, globally throttled. 429 on a
+        /// call that carried no `setupCode` — kept out of `.rejected` so a
+        /// caller can tell "wait and try again" apart from a flat refusal
+        /// without inspecting the string (review ruling, 2026-08-15, round
+        /// 2: `submitWithoutCode()` used to catch both as `.rejected` and
+        /// show the wrong copy for a throttle).
+        case throttled(String)
         /// The Keychain could not hold a credential. Raised *before* pairing,
         /// so nothing has been spent when the operator sees it.
         case credentialStoreUnusable(String)
@@ -88,6 +106,7 @@ public actor HubClient {
             case let .unexpected(detail): detail
             case .unauthorized: "the hub rejected this credential"
             case let .rejected(reason): reason
+            case let .throttled(reason): reason
             case let .credentialStoreUnusable(detail):
                 "this device cannot store a credential — \(detail)"
             }
@@ -280,6 +299,62 @@ public actor HubClient {
         }
     }
 
+    /// Every documented ending of `POST /api/v1/devices/{device_id}/readopt`.
+    ///
+    /// The Detached section's "Re-add" (ruled 2026-08-15): `unbind` keeps the
+    /// row and its binding on purpose, and this is what makes that worth
+    /// doing rather than merely quiet — the operator gets the *same* device
+    /// back, name and history intact, instead of re-binding through `bind`
+    /// and hoping the proposed id is the one that lands.
+    public enum ReadoptOutcome: Sendable, Equatable {
+        /// 200 — reattached, with its old name, thresholds and history.
+        case readopted(Components.Schemas.DeviceView)
+        /// 404 — unknown, or not detached.
+        case notDetached
+        /// 409 — its channel is now held by another adopted device.
+        case channelHeld
+    }
+
+    public func readopt(deviceId: String) async throws -> ReadoptOutcome {
+        switch try await client.readoptDevice(path: .init(deviceId: deviceId)) {
+        case let .ok(response): return .readopted(try response.body.json)
+        case .notFound: return .notDetached
+        case .conflict: return .channelHeld
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the device id")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("readopt returned \(statusCode)")
+        }
+    }
+
+    /// Every documented ending of `POST /api/v1/devices/{device_id}/forget`.
+    ///
+    /// The Detached section's "Clear" — deleting a detached row for good.
+    /// Distinct from the parameterless `forget()` below, which clears this
+    /// device's own stored credential; this one asks the hub to delete
+    /// someone else's device row.
+    public enum ForgetDeviceOutcome: Sendable, Equatable {
+        case forgotten
+        /// 404 — unknown.
+        case unknown
+        /// 409 — still adopted; unbind it first.
+        case stillAdopted
+    }
+
+    public func forget(deviceId: String) async throws -> ForgetDeviceOutcome {
+        switch try await client.forgetDevice(path: .init(deviceId: deviceId)) {
+        case .noContent: return .forgotten
+        case .notFound: return .unknown
+        case .conflict: return .stillAdopted
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the device id")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("forget returned \(statusCode)")
+        }
+    }
+
     /// Name a device, or pass `nil` to go back to the raw id.
     public func rename(deviceId: String, to name: String?) async throws {
         switch try await client.renameDevice(
@@ -399,7 +474,7 @@ public actor HubClient {
     /// time that this device cannot keep a secret means the credential is gone
     /// and the only way back is SSH. The probe costs one Keychain round trip and
     /// moves that discovery to the side of the line where nothing is spent.
-    public func pair(clientName: String) async throws -> PairingOutcome {
+    public func pair(clientName: String, setupCode: String? = nil) async throws -> PairingOutcome {
         do {
             try tokens.probe()
         } catch {
@@ -407,7 +482,7 @@ public actor HubClient {
         }
 
         let output = try await client.pair(
-            body: .json(.init(clientName: clientName))
+            body: .json(.init(clientName: clientName, setupCode: setupCode))
         )
         switch output {
         case let .ok(response):
@@ -436,7 +511,33 @@ public actor HubClient {
                 "another device used the recovery window first — open a new one on the hub"
             )
         case .unprocessableContent:
-            throw ClientError.rejected("the hub would not accept that name")
+            // 3.7.0: 422 has no body, and covers two different refusals that
+            // share the one status code — a rejected `client_name` (plain
+            // flow) or a missing/wrong `setup_code` (setup-code flow). Which
+            // one it was is decided by what this call sent, not by anything
+            // the hub sends back (controller ruling, 2026-08-15: do not
+            // parse an undeclared body).
+            guard setupCode != nil else {
+                throw ClientError.rejected("the hub would not accept that name")
+            }
+            return .codeRejected
+        case .tooManyRequests:
+            // 3.7.0: only a setup-code attempt is rate-limited, so this
+            // should only be reachable when `setupCode` was supplied — but
+            // "should" is not "is", and a code-less 429 must not silently
+            // become an outcome case the plain flow's exhaustive switch has
+            // no honest handling for. Symmetric with the 422 arm just
+            // above: thrown for the code-less caller, returned as an
+            // outcome only when this call carried a `setupCode`. Thrown as
+            // `.throttled`, not `.rejected` — a caller that also sends
+            // code-less calls (the setup screen's own fire escape) needs to
+            // tell a throttle apart from a flat refusal without parsing the
+            // reason string, and `.rejected` and `.throttled` render the
+            // same word-for-word text either way.
+            guard setupCode != nil else {
+                throw ClientError.throttled("too many failed setup-code attempts — wait and try again")
+            }
+            return .throttled
         case let .undocumented(statusCode, _):
             throw ClientError.unexpected("pair returned \(statusCode)")
         }

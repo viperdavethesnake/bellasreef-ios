@@ -118,18 +118,68 @@ public final class HistoryModel {
     public private(set) var gapFloor: TimeInterval?
 
     public var range: HistoryRange = .day {
-        didSet { Task { await load() } }
+        didSet { reload() }
     }
 
     private let client: HubClient
     private let catalog: DeviceCatalog
+
+    /// The in-flight load, if any. Lets a new request supersede an old one
+    /// instead of racing it.
+    @ObservationIgnored private var loadTask: Task<Void, Never>?
 
     public init(client: HubClient, catalog: DeviceCatalog) {
         self.client = client
         self.catalog = catalog
     }
 
-    public func load() async {
+    /// Cancels whatever load is in progress and starts a tracked replacement.
+    ///
+    /// The one place that touches `loadTask`, behind both `reload()` and
+    /// `refresh()`. Every view entry point — range change, retry, returning
+    /// to the foreground, pull-to-refresh, the initial `.task` — goes
+    /// through one of those two, so no matter which fires last, it is the
+    /// one whose result survives; an in-flight sibling gets cancelled here
+    /// before it ever gets the chance to publish.
+    ///
+    /// Finding, 2026-08-15 (second pass): `range.didSet` alone spawning
+    /// `Task { await load() }` was not enough — `.refreshable`, the retry
+    /// button and the `scenePhase` handler each called `load()` in their own
+    /// untracked `Task`, so a pull-to-refresh at 1H racing a flip to 7D could
+    /// still publish stale 1H data over the 7D result: `checkCancellation()`
+    /// never fires for a task nothing ever cancels. `load()` is no longer
+    /// `public` for exactly this reason — the compiler is what now enforces
+    /// that every caller goes through the tracked path.
+    private func supersede() -> Task<Void, Never> {
+        loadTask?.cancel()
+        let task = Task { await load() }
+        loadTask = task
+        return task
+    }
+
+    /// Fire-and-forget single-flight entry point: range changes, retry, and
+    /// returning to the foreground don't own a spinner to wait on.
+    public func reload() {
+        _ = supersede()
+    }
+
+    /// Awaitable single-flight entry point: pull-to-refresh's `.refreshable`
+    /// needs to know when the load actually finished (so its spinner stops),
+    /// and the initial `.task` awaits this the same way. If a `reload()`
+    /// races in and supersedes it, this still returns cleanly — `load()`'s
+    /// own cancellation handling makes that a clean return, not a hang.
+    public func refresh() async {
+        await supersede().value
+    }
+
+    /// Not `public`: every caller reaches this through `reload()`/`refresh()`
+    /// so the single-flight guarantee above cannot be bypassed by a new view
+    /// entry point calling `load()` directly, the way four of them once did.
+    /// Kit tests call this directly to exercise cancellation-transparency
+    /// and error formatting in isolation, without the timing a full
+    /// `reload()`/`refresh()` race would need — `@testable import` reaches
+    /// `internal`, which is what makes that legitimate rather than a leak.
+    func load() async {
         if traces.isEmpty { state = .loading }
         let end = Date()
         let start = end.addingTimeInterval(-range.duration)
@@ -137,6 +187,10 @@ public final class HistoryModel {
 
         do {
             let view = try await client.history(from: start, to: end, buckets: range.buckets)
+            // A load cancelled between the request landing and here must not
+            // publish results for a range nobody is looking at anymore —
+            // `client.history` does not itself check cancellation.
+            try Task.checkCancellation()
             // `bucket_s` is what the hub actually used, not what was asked for.
             // Segmenting on the requested size would tear a series apart the
             // moment the cap changed the step.
@@ -155,8 +209,15 @@ public final class HistoryModel {
             episodes = view.episodes
             state = traces.contains { !$0.isEmpty } ? .loaded : .empty
         } catch {
+            // Our own cancellation is not news — a tab switch cancelling
+            // this `.task`, or `reload()` superseding it — so it leaves
+            // `state` exactly as it was and the next load gets a clean run.
+            // Finding, 2026-08-15: this used to render as a permanent
+            // failure screen carrying the raw transport dump, for a request
+            // the app itself cancelled while the server was healthy.
+            guard !HumanError.isCancellation(error) else { return }
             log.error("history load failed: \(String(describing: error))")
-            state = .failed("\(error)")
+            state = .failed(HumanError.describe(error))
         }
     }
 

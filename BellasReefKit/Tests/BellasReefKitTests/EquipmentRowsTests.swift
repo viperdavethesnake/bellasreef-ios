@@ -13,10 +13,12 @@ import Testing
 /// behaviour must not regress).
 private enum EquipmentFixtures {
     static func device(
-        id: String, name: String = "Fixture", actuatorClass: String? = "dimmer"
+        id: String, name: String = "Fixture", actuatorClass: String? = "dimmer",
+        adopted: Bool = true
     ) -> Components.Schemas.DeviceView {
         .init(
             actuatorClass: actuatorClass,
+            adopted: adopted,
             deviceId: id,
             displayName: name,
             driverId: "pca9685",
@@ -88,6 +90,18 @@ struct EquipmentRowsTests {
             return
         }
         #expect(name == "Display light")
+    }
+
+    /// CRITICAL-1: unbind is not a delete — a detached actuator still carries
+    /// its `actuatorClass`, so `actuatorClass != nil` alone would keep
+    /// showing it as live equipment on the tab that commands it. It belongs
+    /// only in `SystemView`'s "Detached" list, not here.
+    @Test("a detached actuator (adopted: false) produces no equipment row")
+    func detachedActuatorProducesNoRow() {
+        let device = EquipmentFixtures.device(id: "light-1", name: "Display light", adopted: false)
+        let sections = equipmentRows(devices: [device], frames: [:], roles: ["light-1": "light"])
+
+        #expect(sections.isEmpty)
     }
 
     @Test("a frame with no adopted device behind it still appears")

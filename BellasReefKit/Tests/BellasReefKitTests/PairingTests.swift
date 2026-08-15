@@ -115,6 +115,98 @@ struct PairingTests {
         }
     }
 
+    // MARK: Setup-code pairing (3.7.0)
+
+    @Test("a 422 on the plain flow still throws .rejected, unchanged")
+    func plainFlowRejectionUnchanged() async {
+        let transport = StubTransport { _, _, _ in (422, nil) }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        do {
+            _ = try await client.pair(clientName: "iPad")
+            Issue.record("a 422 without a setup code should throw")
+        } catch HubClient.ClientError.rejected {
+            // expected — the plain flow's name-rejection copy still lives here.
+        } catch {
+            Issue.record("expected .rejected, got \(error)")
+        }
+    }
+
+    @Test("a 422 on a code-bearing call is its own outcome, not a thrown reason")
+    func codeRejected() async throws {
+        let transport = StubTransport { _, _, _ in (422, nil) }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        guard case .codeRejected = try await client.pair(clientName: "iPad", setupCode: "7KF29QMD") else {
+            Issue.record("a 422 with a setup code should be .codeRejected, not thrown")
+            return
+        }
+    }
+
+    @Test("a 429 on a code-bearing call is throttled, not a thrown reason")
+    func codeThrottled() async throws {
+        let transport = StubTransport { _, _, _ in (429, nil) }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        guard case .throttled = try await client.pair(clientName: "iPad", setupCode: "7KF29QMD") else {
+            Issue.record("a 429 should be .throttled, not thrown")
+            return
+        }
+    }
+
+    @Test("a setup code rides on the wire, normalized")
+    func setupCodeOnTheWire() async throws {
+        let log = CallLog()
+        let transport = StubTransport { operation, _, body in
+            await log.record(operation)
+            let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            #expect(parsed?["setup_code"] as? String == "7KF29QMD")
+            return (200, json(#"{"refresh_token":"rt","client_id":"c"}"#))
+        }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        _ = try await client.pair(clientName: "iPad", setupCode: "7KF29QMD")
+        #expect(await log.count(of: "pair") == 1)
+    }
+
+    @Test("a nil setup code is omitted from the wire, not encoded as null")
+    func setupCodeOmittedWhenNil() async throws {
+        // Load-bearing: the plain flow's byte-identity with the pre-3.7.0
+        // wire shape rests on this. A synthesized Codable that switched to
+        // encoding `"setup_code": null` would still pass every outcome test
+        // above — none of them inspect the body when no code is sent.
+        let log = CallLog()
+        let transport = StubTransport { operation, _, body in
+            await log.record(operation)
+            let parsed = try? JSONSerialization.jsonObject(with: body) as? [String: Any]
+            #expect(parsed?.keys.contains("setup_code") == false)
+            return (200, json(#"{"refresh_token":"rt","client_id":"c"}"#))
+        }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        _ = try await client.pair(clientName: "iPad")
+        #expect(await log.count(of: "pair") == 1)
+    }
+
+    @Test("a 429 on a code-less call throws the distinct .throttled case, not .rejected")
+    func plainFlowThrottleIsDistinct() async {
+        // Distinct on purpose: a caller that also makes code-less calls (the
+        // setup screen's own "I don't have a code" fire escape) needs to
+        // tell a throttle apart from a flat refusal without inspecting the
+        // reason string, which reads identically either way.
+        let transport = StubTransport { _, _, _ in (429, nil) }
+        let client = HubClient(hub: anyHub, tokens: MemoryCredentials(), transport: transport)
+
+        do {
+            _ = try await client.pair(clientName: "iPad")
+            Issue.record("a 429 without a setup code should throw")
+        } catch HubClient.ClientError.throttled {
+            // expected
+        } catch {
+            Issue.record("expected .throttled, got \(error)")
+        }
+    }
+
     // MARK: The pre-flight
 
     @Test("a Keychain that cannot hold a credential stops pairing before the hub spends anything")

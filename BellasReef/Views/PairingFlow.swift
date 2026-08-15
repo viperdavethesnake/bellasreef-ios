@@ -221,7 +221,62 @@ struct HubIdentifyCard: View {
 
     @ViewBuilder
     private func action(_ info: Components.Schemas.Info) -> some View {
-        if recoveryNeeded {
+        // Checked first, ahead of `setupMode`: `pending` is local state this
+        // view already has in hand the instant `SetupCodeEntry`'s fire-escape
+        // sets it, whereas `info.setupMode` only updates after
+        // `refreshInfo()`'s network round trip lands. Ordering this branch
+        // below `setupMode` used to mean a `pending` set mid-flight rendered
+        // nothing new until that request finished — re-showing the setup-code
+        // screen for however long the round trip took, or forever if it
+        // failed, even though the hub had already committed to a pending
+        // request. `pending` is set only by an outcome the hub already
+        // returned, so it is always safe to act on immediately, and it is
+        // `nil` on every path that does not concern it — the plain flow's own
+        // `.pending` case (§ `pair()` below) runs only from the trailing
+        // `else` branch, where `setupMode` is already false, so hoisting this
+        // check does not change when that path fires.
+        if let pending, let client {
+            PendingApproval(
+                pending: pending,
+                client: client,
+                onGranted: { refreshToken, clientId in
+                    await complete(refreshToken: refreshToken, clientId: clientId, using: client)
+                },
+                onStartOver: { self.pending = nil }
+            )
+        } else if info.setupMode == true, let client {
+            // Feature 2, 2026-08-15 new-owner-experience spec: a hub that
+            // has never paired anyone shows the printed code instead of the
+            // request-and-wait UI. `setup_mode` is false for every later
+            // pair, so this branch never shadows the flow below it.
+            SetupCodeEntry(
+                client: client,
+                // Same reasoning as `pair()`'s own `problem = nil`: a stale
+                // sentence from an earlier, unrelated failure on this screen
+                // must not linger under a fresh submit that has not failed.
+                onSubmitStarted: { problem = nil },
+                onGranted: { refreshToken, clientId in
+                    await complete(refreshToken: refreshToken, clientId: clientId, using: client)
+                },
+                // A race, not a hypothetical: another device can finish
+                // pairing — via its own window, approval, or code — while
+                // this screen is open, which both ends setup mode and makes
+                // a code-less pair() from here return a real 202 with a real
+                // code and a real expiry. Setting `self.pending` here is now
+                // what routes to `PendingApproval` on the very next render —
+                // the `pending` branch above no longer waits on
+                // `refreshInfo()` to notice. `refreshInfo()` still runs, so
+                // `info.setupMode` stops being stale for anything else that
+                // reads it (e.g. a `Cancel and start over` back to this
+                // screen), but it is no longer this handoff's critical path.
+                onPending: { newPending in
+                    self.pending = newPending
+                    await refreshInfo()
+                },
+                onSetupModeEnded: { await refreshInfo() },
+                onError: { problem = $0 }
+            )
+        } else if recoveryNeeded {
             // Verbatim from auth.md: the operator needs the exact command, and
             // paraphrasing a recovery instruction is how people end up stuck.
             VStack(spacing: 12) {
@@ -238,15 +293,6 @@ struct HubIdentifyCard: View {
                     .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
             }
-        } else if let pending, let client {
-            PendingApproval(
-                pending: pending,
-                client: client,
-                onGranted: { refreshToken, clientId in
-                    await complete(refreshToken: refreshToken, clientId: clientId, using: client)
-                },
-                onStartOver: { self.pending = nil }
-            )
         } else {
             VStack(spacing: 14) {
                 Text(prospect(info))
@@ -331,6 +377,22 @@ struct HubIdentifyCard: View {
         }
     }
 
+    /// Re-checks `/info` on the existing client, without discarding it.
+    ///
+    /// `SetupCodeEntry` calls this after a rejected setup code: the code may
+    /// have paired a different device in the meantime, which flips
+    /// `setup_mode` false and sends `action(_:)` back to the normal
+    /// request-and-wait branch on its own. A failure here is silent by
+    /// design — the setup-code screen is still showing its own rejection
+    /// copy, and there is nothing more useful to say about a background
+    /// re-check that did not land.
+    private func refreshInfo() async {
+        guard let client else { return }
+        if let fresh = try? await client.info() {
+            info = fresh
+        }
+    }
+
     private func pair() async {
         pairing = true
         defer { pairing = false }
@@ -345,6 +407,12 @@ struct HubIdentifyCard: View {
                 self.pending = pending
             case .needsRecoveryCLI:
                 recoveryNeeded = true
+            case .codeRejected, .throttled:
+                // Unreachable here: this call never sends a setupCode, and
+                // the hub only returns these two in response to one.
+                // Handled so the switch stays exhaustive as the outcome
+                // enum grows for SetupCodeEntry's use.
+                problem = "unexpected pairing response"
             }
         } catch {
             problem = "\(error)"
