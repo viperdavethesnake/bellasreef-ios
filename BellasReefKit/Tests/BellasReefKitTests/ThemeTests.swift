@@ -5,7 +5,9 @@
 // tune the palette until green, never the floors.
 
 import Foundation
+import SwiftUI
 import Testing
+import UIKit
 
 @testable import BellasReefKit
 
@@ -70,6 +72,63 @@ struct DarkPaletteContrastTests {
     /// Non-text UI (sparkline stroke, tint): WCAG 1.4.11 floor.
     @Test func accentOnBase() {
         #expect(contrast(p.accent, p.base) >= 3.0)
+    }
+}
+
+/// The contrast suites vouch for `Palette` values; these bind the public
+/// `Theme.*` colours to the palette roles they must resolve to. Without them a
+/// transposed role in Theme's `adaptive` table — say `surface` resolving
+/// `$0.base` — would leave every value-only test green: constructible but not
+/// running, in miniature.
+@MainActor
+@Suite("Theme resolver binding")
+struct ThemeResolverBindingTests {
+    /// All ten roles, so a transposition anywhere in the table is caught, not
+    /// just at two spot-checked corners.
+    private static let roles: [(name: String, color: Color, role: (Palette) -> Palette.RGB)] = [
+        ("base", Theme.base, { $0.base }),
+        ("surface", Theme.surface, { $0.surface }),
+        ("surfaceRaised", Theme.surfaceRaised, { $0.surfaceRaised }),
+        ("primaryText", Theme.primaryText, { $0.primaryText }),
+        ("secondaryText", Theme.secondaryText, { $0.secondaryText }),
+        ("tertiaryText", Theme.tertiaryText, { $0.tertiaryText }),
+        ("accent", Theme.accent, { $0.accent }),
+        ("attention", Theme.attention, { $0.attention }),
+        ("safety", Theme.safety, { $0.safety }),
+        ("silence", Theme.silence, { $0.silence }),
+    ]
+
+    private func assertResolves(_ style: UIUserInterfaceStyle, to palette: Palette) {
+        let traits = UITraitCollection(userInterfaceStyle: style)
+        for (name, color, role) in Self.roles {
+            let resolved = UIColor(color).resolvedColor(with: traits)
+            var red: CGFloat = 0
+            var green: CGFloat = 0
+            var blue: CGFloat = 0
+            var alpha: CGFloat = 0
+            #expect(resolved.getRed(&red, green: &green, blue: &blue, alpha: &alpha), "\(name)")
+            let expected = role(palette)
+            // 1e-3: getRed round-trips the colour pipeline, which can wobble
+            // the last decimals; the palette's own values differ from each
+            // other by whole hundredths, so this cannot mask a transposition.
+            #expect(abs(Double(red) - expected.red) < 1e-3, "\(name) red")
+            #expect(abs(Double(green) - expected.green) < 1e-3, "\(name) green")
+            #expect(abs(Double(blue) - expected.blue) < 1e-3, "\(name) blue")
+            #expect(abs(Double(alpha) - 1.0) < 1e-3, "\(name) alpha")
+        }
+    }
+
+    @Test func darkTraitsResolveTheDarkPalette() {
+        assertResolves(.dark, to: .dark)
+    }
+
+    @Test func lightTraitsResolveTheLightPalette() {
+        assertResolves(.light, to: .light)
+    }
+
+    /// Dark is primary: an environment that has not said resolves to dark.
+    @Test func unspecifiedTraitsResolveTheDarkPalette() {
+        assertResolves(.unspecified, to: .dark)
     }
 }
 
