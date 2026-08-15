@@ -397,6 +397,12 @@ struct PrimaryReading: View {
                     }
                     .padding(.top, 6)
                     .accessibilityHidden(true)
+                } else {
+                    Text("trend: collecting…")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.tertiaryText)
+                        .padding(.top, 6)
+                        .accessibilityHidden(true)
                 }
             }
             .accessibilityElement(children: .combine)
