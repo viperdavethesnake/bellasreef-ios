@@ -410,6 +410,76 @@ public actor HubClient {
         return message.hasPrefix(prefix) ? String(message.dropFirst(prefix.count)) : message
     }
 
+    // MARK: Overrides
+
+    /// Every documented ending of `POST /api/v1/overrides`.
+    ///
+    /// The 503 is its own case rather than a thrown `.rejected` — an override
+    /// IS a deadline, and the Lighting tab must render "the hub's clock is
+    /// not trusted yet" as its own quiet state, not as a generic failure the
+    /// operator would retry into an identical result (spec Feature 2, plan
+    /// 2026-08-15 Global Constraints).
+    public enum HoldOutcome: Sendable, Equatable {
+        /// 200 — the hold is live now. Carries the whole created override
+        /// (mirrors `readopt`'s whole-`DeviceView` return): `.id` is what
+        /// `release` needs, and `.duty`/`.expiresInS` let the card show the
+        /// hold immediately rather than waiting on the next state frame.
+        case granted(Components.Schemas.OverrideView)
+        /// 409 — the target does not accept commands (`observe_only`
+        /// authority; device-classes.md §2.3). The command never reached a
+        /// component that "knew better" and dropped it — it was refused at
+        /// the boundary, and the operator should be told that plainly rather
+        /// than as a generic rejection.
+        case notCommandable
+        /// 503 — clock not synchronised; a deadline computed from a clock
+        /// chrony is about to step is not the duration the operator asked
+        /// for. Pinned copy renders this, not `HumanError`.
+        case clockUntrusted
+    }
+
+    public func hold(
+        target: String, duty: Double, durationS: Double, reason: String
+    ) async throws -> HoldOutcome {
+        switch try await client.createOverride(
+            body: .json(.init(durationS: durationS, duty: duty, reason: reason, target: target))
+        ) {
+        case let .ok(response): return .granted(try response.body.json)
+        case .conflict: return .notCommandable
+        case .serviceUnavailable: return .clockUntrusted
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected that hold")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("hold returned \(statusCode)")
+        }
+    }
+
+    /// Every documented ending of `DELETE /api/v1/overrides/{override_id}`.
+    public enum ReleaseOutcome: Sendable, Equatable {
+        case released
+        /// 404 — unknown, or already released. The hold is gone either way,
+        /// same shape as `unbind`'s `.alreadyUnbound`.
+        case alreadyReleased
+    }
+
+    /// `overrideId` is `HoldOutcome.granted`'s `.id` — the only field the
+    /// generated `OverrideView`/`OverrideContext` shapes offer to identify a
+    /// hold for release; there is no separate "handle". A caller reading the
+    /// id off a live state frame's `override` (rather than off its own
+    /// `hold` call) uses the same id, since both are the wire's
+    /// `OverrideContext`/`OverrideView.id`.
+    public func release(overrideId: String) async throws -> ReleaseOutcome {
+        switch try await client.releaseOverride(path: .init(overrideId: overrideId)) {
+        case .ok: return .released
+        case .notFound: return .alreadyReleased
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected that override id")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("release returned \(statusCode)")
+        }
+    }
+
     // MARK: History
 
     /// Downsampled history for the window, with alert episodes.
