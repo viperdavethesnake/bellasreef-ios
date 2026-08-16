@@ -671,7 +671,7 @@ struct ChannelRow: View {
 
             if let override = frame.override {
                 Label(
-                    "Held at \(Int(override.duty * 100))% · \(Self.remaining(override.expiresInS))",
+                    "Held at \(Int(override.duty * 100))% · \(formatRemaining(override.expiresInS))",
                     systemImage: "hand.raised.fill"
                 )
                 .font(Theme.caption)
@@ -698,11 +698,19 @@ struct ChannelRow: View {
         if frame.payload.latched == true { parts.append("interlock latched") }
         return parts.joined(separator: ", ")
     }
+}
 
-    private static func remaining(_ seconds: Double) -> String {
-        let minutes = Int(seconds) / 60
-        if minutes >= 60 { return "\(minutes / 60)h \(minutes % 60)m left" }
-        if minutes >= 1 { return "\(minutes)m left" }
-        return "under a minute left"
-    }
+/// Minutes/hours-left phrasing for a live hold's countdown.
+///
+/// Hoisted out of `ChannelRow` (review fold, 2026-08-15): `LightingView`'s
+/// hold banner needs the identical wording for the identical wire concept
+/// (`OverrideContext`/`LightingCard.ActiveHold`'s time-to-expiry), and a
+/// second copy is exactly the kind of thing that drifts one small edit at a
+/// time. File-scope rather than a type member — neither caller has a
+/// natural type to hang it on that the other should also depend on.
+func formatRemaining(_ seconds: Double) -> String {
+    let minutes = Int(seconds) / 60
+    if minutes >= 60 { return "\(minutes / 60)h \(minutes % 60)m left" }
+    if minutes >= 1 { return "\(minutes)m left" }
+    return "under a minute left"
 }
