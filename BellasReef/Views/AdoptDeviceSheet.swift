@@ -46,7 +46,9 @@ struct AdoptDeviceSheet: View {
             Form {
                 Section("Channel") {
                     LabeledContent("Source", value: capability.source.rawValue)
-                    LabeledContent("Channel", value: capability.channel)
+                    // Displayed 1-based (ruling 2026-08-17); the bind below
+                    // sends `capability.channel` raw, as the hub numbers it.
+                    LabeledContent("Channel", value: ChannelLabel.humanNumber(capability.channel))
                     LabeledContent("Driver", value: driverType.rawValue)
                 }
                 Section("Device") {
@@ -147,7 +149,7 @@ struct AdoptDeviceSheet: View {
     private static func seedName(for capability: Components.Schemas.CapabilityView) -> String {
         capability.source.rawValue == "w1-bus"
             ? "Temperature probe"
-            : "Light \(capability.channel)"
+            : "Light \(ChannelLabel.humanNumber(capability.channel))"
     }
 
     private func adopt() async {
@@ -155,6 +157,8 @@ struct AdoptDeviceSheet: View {
         defer { working = false }
         problem = nil
         do {
+            // An identifier, not a label: this stays 0-based like the wire,
+            // so a pi-pwm channel 0 is still `pi-pwm-0` on the hub.
             let proposed = "\(driverType.rawValue)-\(capability.channel)"
                 .lowercased().replacingOccurrences(of: " ", with: "-")
             // BindDeviceRequest's memberwise init parameter order is
