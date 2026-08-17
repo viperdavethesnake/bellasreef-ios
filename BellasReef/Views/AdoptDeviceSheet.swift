@@ -44,12 +44,20 @@ struct AdoptDeviceSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Channel") {
+                Section {
                     LabeledContent("Source", value: capability.source.rawValue)
                     // Displayed 1-based (ruling 2026-08-17); the bind below
                     // sends `capability.channel` raw, as the hub numbers it.
                     LabeledContent("Channel", value: ChannelLabel.humanNumber(capability.channel))
                     LabeledContent("Driver", value: driverType.rawValue)
+                } header: {
+                    Text("Channel")
+                } footer: {
+                    if isActuator {
+                        // The one screen where a person cross-references a
+                        // board. Boards and datasheets count from 0.
+                        Text("Numbered from 1 here; the board prints it from 0, so channel \(ChannelLabel.humanNumber(capability.channel)) is the board's \(capability.channel).")
+                    }
                 }
                 Section("Device") {
                     TextField("Name", text: $name)
