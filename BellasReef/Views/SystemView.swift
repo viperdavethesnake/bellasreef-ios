@@ -352,7 +352,8 @@ struct SystemView: View {
         } footer: {
             Text("Adopting a channel makes it a device the engine may command. "
                  + "Controls live on the tab that uses the device; this list is "
-                 + "the inventory.")
+                 + "the inventory. Channels are numbered from 1 here; boards "
+                 + "print them from 0, so channel 1 is a board's 0.")
         }
     }
 
@@ -402,12 +403,13 @@ struct SystemView: View {
 
     /// Matches the available-channel rows' voice (`"channel \(capability.channel)"`)
     /// while staying compact for an already-adopted row: a numeric PWM channel
-    /// reads as `ch 0`, a 1-Wire ROM (not a number) is shown bare rather than
-    /// as `ch 28-000000bfe244`.
+    /// reads as `ch 1`, a 1-Wire ROM (not a number) is shown bare rather than
+    /// as `ch 28-000000bfe244`. The number is 1-based for the reader and
+    /// 0-based on the wire — see `ChannelLabel`.
     private func deviceSubtitle(_ device: Components.Schemas.DeviceView) -> String {
         var parts = [device.driverId]
         if let channel = device.channel {
-            parts.append(Int(channel) != nil ? "ch \(channel)" : channel)
+            parts.append(Int(channel) != nil ? "ch \(ChannelLabel.humanNumber(channel))" : channel)
         }
         if let role = device.role { parts.append(role) }
         return parts.joined(separator: " · ")
@@ -417,7 +419,7 @@ struct SystemView: View {
     private func availableRow(_ capability: Components.Schemas.CapabilityView) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(capability.source.rawValue) · channel \(capability.channel)")
+                Text("\(capability.source.rawValue) · channel \(ChannelLabel.humanNumber(capability.channel))")
                     .foregroundStyle(Theme.primaryText)
                 Text(availableSubtitle(capability))
                     .font(Theme.caption)

@@ -44,10 +44,20 @@ struct AdoptDeviceSheet: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Channel") {
+                Section {
                     LabeledContent("Source", value: capability.source.rawValue)
-                    LabeledContent("Channel", value: capability.channel)
+                    // Displayed 1-based (ruling 2026-08-17); the bind below
+                    // sends `capability.channel` raw, as the hub numbers it.
+                    LabeledContent("Channel", value: ChannelLabel.humanNumber(capability.channel))
                     LabeledContent("Driver", value: driverType.rawValue)
+                } header: {
+                    Text("Channel")
+                } footer: {
+                    if isActuator {
+                        // The one screen where a person cross-references a
+                        // board. Boards and datasheets count from 0.
+                        Text("Numbered from 1 here; the board prints it from 0, so channel \(ChannelLabel.humanNumber(capability.channel)) is the board's \(capability.channel).")
+                    }
                 }
                 Section("Device") {
                     TextField("Name", text: $name)
@@ -147,7 +157,7 @@ struct AdoptDeviceSheet: View {
     private static func seedName(for capability: Components.Schemas.CapabilityView) -> String {
         capability.source.rawValue == "w1-bus"
             ? "Temperature probe"
-            : "Light \(capability.channel)"
+            : "Light \(ChannelLabel.humanNumber(capability.channel))"
     }
 
     private func adopt() async {
@@ -155,6 +165,8 @@ struct AdoptDeviceSheet: View {
         defer { working = false }
         problem = nil
         do {
+            // An identifier, not a label: this stays 0-based like the wire,
+            // so a pi-pwm channel 0 is still `pi-pwm-0` on the hub.
             let proposed = "\(driverType.rawValue)-\(capability.channel)"
                 .lowercased().replacingOccurrences(of: " ", with: "-")
             // BindDeviceRequest's memberwise init parameter order is
