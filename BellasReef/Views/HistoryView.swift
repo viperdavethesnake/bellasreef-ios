@@ -367,16 +367,21 @@ struct Footnote: View {
 
     var body: some View {
         let gaps = max(0, trace.segments.count - 1)
-        let bands = history.bands(for: trace.deviceId).count
+        let phrases = EpisodeSummary.phrases(for: history.bands(for: trace.deviceId))
         let floor = history.gapFloor.map(Self.resolution)
 
         HStack(spacing: 12) {
-            if bands > 0 {
+            // Per class, tinted like the band it counts (UX review A2): a
+            // silence is violet on the chart and violet here; a threshold
+            // excursion is amber in both places.
+            ForEach(phrases, id: \.text) { phrase in
                 Label(
-                    bands == 1 ? "1 alert episode" : "\(bands) alert episodes",
-                    systemImage: "exclamationmark.triangle.fill"
+                    phrase.text,
+                    systemImage: phrase.alertClass == .silence
+                        ? "antenna.radiowaves.left.and.right.slash"
+                        : "exclamationmark.triangle.fill"
                 )
-                .foregroundStyle(Theme.attention)
+                .foregroundStyle(phrase.alertClass == .silence ? Theme.silence : Theme.attention)
             }
             if gaps > 0 {
                 // Named rather than left to be inferred from a broken line: a
