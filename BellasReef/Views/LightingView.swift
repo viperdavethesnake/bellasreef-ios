@@ -53,7 +53,7 @@ struct LightingView: View {
                 // the same `StatusLine` TankView leads with, unmodified: it
                 // is driven purely by `monitor.tone`/`monitor.statusLine`,
                 // nothing tab-specific.
-                StatusLine(monitor: monitor)
+                StatusLine(monitor: monitor, catalog: catalog)
 
                 if cards.isEmpty {
                     emptyState(catalog: catalog)
