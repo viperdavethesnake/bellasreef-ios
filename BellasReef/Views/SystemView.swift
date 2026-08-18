@@ -140,15 +140,15 @@ struct SystemView: View {
                 titleVisibility: .visible,
                 presenting: unadopting
             ) { device in
-                Button("Unadopt \(device.displayName ?? device.deviceId)",
-                       role: .destructive) {
+                Button("Unadopt \(device.displayName ?? device.deviceId)") {
                     Task { await unadopt(device) }
                 }
                 Button("Cancel", role: .cancel) {}
             } message: { _ in
                 Text("The engine stops commanding this channel and it returns to "
-                     + "its safe state. History is kept — adopting the same "
-                     + "hardware again reattaches it.")
+                     + "its safe state. Nothing is deleted: the name, thresholds "
+                     + "and history are kept, and adopting the same hardware "
+                     + "again reattaches them.")
             }
             .confirmationDialog(
                 "Clear this device?",
@@ -368,7 +368,10 @@ struct SystemView: View {
                     .foregroundStyle(Theme.tertiaryText)
             }
             Spacer()
-            Button("Unadopt", role: .destructive) { unadopting = device }
+            // Not `.destructive`: unadopt is a reversible soft flag — name,
+            // thresholds, bindings and history all survive, and the dialog says
+            // so. Red is reserved for the one hard delete (Clear). UX review A5.
+            Button("Unadopt") { unadopting = device }
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("unadopt-\(device.deviceId)")
         }
