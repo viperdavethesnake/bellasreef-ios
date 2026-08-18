@@ -66,8 +66,8 @@ struct SystemView: View {
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("audit-log")
                 } footer: {
-                    Text("The hub's append-only record of who did what — every pairing, "
-                         + "adoption and revocation it has recorded.")
+                    Text("The hub's append-only record of who did what: holds placed and "
+                         + "ended, devices adopted, thresholds set, pairings and revocations.")
                 }
 
                 Section {
