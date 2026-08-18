@@ -37,11 +37,12 @@ struct OverrideTests {
             #expect(operation == "createOverride")
             return (200, json(#"""
                 {"id": "8f14e45f-ceea-467e-9575-6e3c8e9caeb2", "target": "light-1",
-                 "duty": 0.6, "expires_at": "2026-08-15T00:20:00Z", "expires_in_s": 1200}
+                 "duty": 0.6, "expires_at": "2026-08-15T00:20:00Z", "expires_in_s": 1200,
+                 "transition": "ramp"}
                 """#))
         }
         let outcome = try await client.hold(
-            target: "light-1", duty: 0.6, durationS: 1200, reason: "manual"
+            target: "light-1", duty: 0.6, durationS: 1200, reason: "manual", transition: .ramp
         )
         guard case let .granted(override) = outcome else {
             Issue.record("expected .granted, got \(outcome)")
@@ -50,13 +51,19 @@ struct OverrideTests {
         #expect(override.id == "8f14e45f-ceea-467e-9575-6e3c8e9caeb2")
         #expect(override.duty == 0.6)
         #expect(override.expiresInS == 1200)
+        #expect(override.transition == .ramp)
+        // The `OverrideView` overload of `HoldTransition.init` — the one the
+        // optimistic-hold path in `LightingView` actually calls — agrees
+        // with the wire value too, not just the generated
+        // `OverrideContext`-flavoured comparison above.
+        #expect(HubClient.HoldTransition(override.transition) == .ramp)
     }
 
     @Test("a 409 means the target does not accept commands — observe-only, not a thrown error")
     func holdRefusedObserveOnly() async throws {
         let client = stub { _ in (409, nil) }
         let outcome = try await client.hold(
-            target: "light-1", duty: 0.6, durationS: 1200, reason: "manual"
+            target: "light-1", duty: 0.6, durationS: 1200, reason: "manual", transition: .ramp
         )
         #expect(outcome == .notCommandable)
     }
@@ -68,13 +75,20 @@ struct OverrideTests {
     func holdClockUntrusted() async throws {
         let client = stub { _ in (503, nil) }
         let outcome = try await client.hold(
-            target: "light-1", duty: 0.6, durationS: 1200, reason: "manual"
+            target: "light-1", duty: 0.6, durationS: 1200, reason: "manual", transition: .ramp
         )
         #expect(outcome == .clockUntrusted)
     }
 
-    @Test("hold's request carries duty, duration and reason in the hub's snake_case")
-    func holdRequestBody() async throws {
+    // Parameterised over both transitions (final review, 2026-08-17) rather
+    // than pinned to `.snap` — a transposed `payload` mapping (`.ramp`
+    // encoded as `"snap"` or vice versa) would still pass a test that only
+    // ever sent one of the two values.
+    @Test(
+        "hold's request carries duty, duration, reason and transition in the hub's snake_case",
+        arguments: [HubClient.HoldTransition.snap, .ramp]
+    )
+    func holdRequestBody(transition: HubClient.HoldTransition) async throws {
         let client = HubClient(
             hub: anyHub, tokens: MemoryCredentials(token: "refresh"),
             transport: StubTransport { operation, _, body in
@@ -87,13 +101,32 @@ struct OverrideTests {
                 #expect(parsed?["duty"] as? Double == 0.6)
                 #expect(parsed?["duration_s"] as? Double == 1200)
                 #expect(parsed?["reason"] as? String == "manual")
+                #expect(parsed?["transition"] as? String == transition.rawValue)
                 return (200, json(#"""
                     {"id": "8f14e45f-ceea-467e-9575-6e3c8e9caeb2", "target": "light-1",
-                     "duty": 0.6, "expires_at": "2026-08-15T00:20:00Z", "expires_in_s": 1200}
+                     "duty": 0.6, "expires_at": "2026-08-15T00:20:00Z", "expires_in_s": 1200,
+                     "transition": "\#(transition.rawValue)"}
                     """#))
             }
         )
-        _ = try await client.hold(target: "light-1", duty: 0.6, durationS: 1200, reason: "manual")
+        _ = try await client.hold(
+            target: "light-1", duty: 0.6, durationS: 1200, reason: "manual", transition: transition
+        )
+    }
+
+    @Test("HoldTransition maps 1:1 onto the wire values")
+    func transitionWire() {
+        #expect(HubClient.HoldTransition.snap.rawValue == "snap")
+        #expect(HubClient.HoldTransition.ramp.rawValue == "ramp")
+        #expect(HubClient.HoldTransition.allCases == [.snap, .ramp])
+        // `payload` (the generated `OverrideRequest.TransitionPayload` this
+        // enum encodes to on the way out) is internal to the kit module —
+        // reachable here because this file is `@testable import
+        // BellasReefKit`. `holdRequestBody` above already proves this
+        // mapping end-to-end through JSON; this pins the mapping itself so
+        // a transposed `case .snap: .ramp` fails right here too.
+        #expect(HubClient.HoldTransition.snap.payload == .snap)
+        #expect(HubClient.HoldTransition.ramp.payload == .ramp)
     }
 
     @Test("a 200 release is done, a 404 means already-done — the hold is gone either way")
