@@ -95,7 +95,11 @@ final class AppModel {
         let monitor = TankMonitor(client: client, stream: StreamClient(baseURL: hub.baseURL))
         monitor.onCredentialRejected = { [weak self] in self?.credentialRejected() }
         self.monitor = monitor
-        self.catalog = DeviceCatalog(client: client)
+        let catalog = DeviceCatalog(client: client)
+        self.catalog = catalog
+        // Staleness follows each probe's declared cadence (UX review A3); the
+        // catalog is where the cadence lives, the monitor is what judges age.
+        monitor.cadenceOf = { [weak catalog] id in catalog?.device(id)?.pollIntervalS }
         notice = nil
         phase = .paired(hub)
         monitor.start()
