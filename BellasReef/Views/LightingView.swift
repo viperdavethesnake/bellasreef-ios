@@ -32,6 +32,9 @@ struct LightingView: View {
             }
             .reefBackground()
             .navigationTitle("Lighting")
+            // Inline titles blurred over content that scrolled under them (UX
+            // review B2). The soft edge effect is the system's answer.
+            .scrollEdgeEffectStyle(.soft, for: .top)
         }
     }
 

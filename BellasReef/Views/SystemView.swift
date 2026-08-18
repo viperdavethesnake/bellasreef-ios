@@ -118,6 +118,9 @@ struct SystemView: View {
             .scrollContentBackground(.hidden)
             .reefBackground()
             .navigationTitle("System")
+            // Inline titles blurred over content that scrolled under them (UX
+            // review B2). The soft edge effect is the system's answer.
+            .scrollEdgeEffectStyle(.soft, for: .top)
             .task { await loadEverything() }
             // The list is otherwise a snapshot from whenever this tab last
             // appeared, and the hub changes under it — another device pairs, a
