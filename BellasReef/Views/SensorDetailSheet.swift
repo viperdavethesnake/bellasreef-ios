@@ -81,13 +81,22 @@ struct SensorDetailSheet: View {
                 }
 
                 Section {
-                    Button(isPrimary ? "Primary sensor" : "Make primary") {
-                        model.preferences?.primarySensorId = sensorId
+                    // Immediate and device-local (UX review E6): it writes the
+                    // preference on tap and Cancel does not undo it, so it must
+                    // not look like a field Save will commit. A toggle-shaped
+                    // row with the fact in the footer, rather than a button
+                    // among the form's fields.
+                    Toggle(isOn: Binding(
+                        get: { isPrimary },
+                        set: { on in if on { model.preferences?.primarySensorId = sensorId } }
+                    )) {
+                        Text("Show large on the Tank tab")
                     }
                     .disabled(isPrimary)
                     .frame(minHeight: 44)
                 } footer: {
-                    Text("The primary sensor is the one shown large on the Tank tab.")
+                    Text("Applies on this device as soon as you switch it on — it is not "
+                         + "part of Save, and Cancel leaves it as it is. One sensor at a time.")
                 }
             }
             .scrollContentBackground(.hidden)
