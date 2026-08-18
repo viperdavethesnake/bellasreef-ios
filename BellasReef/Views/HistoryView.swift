@@ -30,6 +30,9 @@ struct HistoryTabView: View {
             }
             .reefBackground()
             .navigationTitle("History")
+            // Inline titles blurred over content that scrolled under them (UX
+            // review B2). The soft edge effect is the system's answer.
+            .scrollEdgeEffectStyle(.soft, for: .top)
         }
         .task {
             // Runs on every appearance, not only on creation: SwiftUI cancels
@@ -370,6 +373,7 @@ struct Footnote: View {
         let phrases = EpisodeSummary.phrases(for: history.bands(for: trace.deviceId))
         let floor = history.gapFloor.map(Self.resolution)
 
+        VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 12) {
             // Per class, tinted like the band it counts (UX review A2): a
             // silence is violet on the chart and violet here; a threshold
@@ -401,6 +405,12 @@ struct Footnote: View {
                 .foregroundStyle(Theme.tertiaryText)
             }
             Spacer()
+        }
+        // The pale band was the one unexplained mark on the chart (UX review
+        // B5). One line, beside the gap disclosure so the two explanations of
+        // what the plot does and does not show sit together.
+        Text("The shaded band is each interval's low to high; the line is its average.")
+            .foregroundStyle(Theme.tertiaryText)
         }
         .font(Theme.caption)
     }
