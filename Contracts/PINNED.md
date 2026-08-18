@@ -6,11 +6,11 @@ reviewable diff rather than something that shifts under the app.
 
 | | |
 |---|---|
-| Backend commit | `91742b8` |
-| CI run | [`32085994939`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/32085994939) (`client-contracts` artifact) |
-| Pinned on | 2026-08-17 |
+| Backend commit | `10690ba` |
+| CI run | [`32173078433`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/32173078433) (`client-contracts` artifact) |
+| Pinned on | 2026-08-18 |
 | OpenAPI | 3.1.0, 23 paths |
-| Contracts version | 3.8.0 |
+| Contracts version | 4.0.0 |
 | Frame schema | v1 |
 
 ## Refreshing
@@ -93,3 +93,14 @@ required broke the kit's hand-built fixtures (`OverrideTests` JSON stubs,
 `LightingFixtures.override`) — updated to carry it, and `HubClient.hold`
 gained a `transition:` parameter so the app always sends the choice
 explicitly rather than relying on the server default.
+
+## What 3.8.0 → 4.0.0 changed
+
+Nothing on the wire. The backend made `open()` a required member of its
+`ActuatorDriver` Protocol — the third versioned contract, the one hardware
+drivers implement — and a required member added to a Protocol is MAJOR under
+its own semver table (`docs/contracts/nats-subjects.md` §5), so the shared
+version number moved. `openapi.json` differs from 3.8.0 in `info.version`
+only; the generated client is byte-for-byte the same, no fixture moved, and
+the `/info` screen simply reads `contracts 4.0.0` off the hub. Pinned so the
+number the app shows is the number the hub serves.
