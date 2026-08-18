@@ -78,6 +78,18 @@ struct HistoryTabView: View {
                 case .empty:
                     Empty(range: history.range)
                 case .loaded:
+                    // A mostly-empty window says why, once, above the charts
+                    // (UX review B6). The axis stays the picked range — 7D
+                    // means seven days — and this names where the record
+                    // starts instead of clamping the plot to it.
+                    if let window = history.window,
+                       let caption = WindowCoverage.caption(
+                           window: window, firstDataAt: history.firstDataAt
+                       ) {
+                        Text(caption)
+                            .font(Theme.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                    }
                     ForEach(history.traces) { trace in
                         TraceChart(trace: trace, history: history)
                     }

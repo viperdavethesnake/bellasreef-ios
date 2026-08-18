@@ -336,6 +336,12 @@ public final class HistoryModel {
     public var lastDataAt: Date? {
         traces.flatMap(\.segments).flatMap(\.buckets).map(\.at).max()
     }
+
+    /// The oldest bucket that carries real data, across every series — where
+    /// the record starts, for the sparse-window caption (UX review B6).
+    public var firstDataAt: Date? {
+        traces.flatMap(\.segments).flatMap(\.buckets).map(\.at).min()
+    }
 }
 
 /// Which kind of episode a band is drawing.
