@@ -64,6 +64,13 @@ struct LightingView: View {
                     Text("Below 8% this dimmer is off.")
                         .font(Theme.caption)
                         .foregroundStyle(Theme.tertiaryText)
+                    // Hoisted from per-card to once-per-list (final review,
+                    // 2026-08-17) — the two-sentence snap/ramp explanation
+                    // was repeating under every card's Hold row; it says the
+                    // same thing regardless of which light it sits under.
+                    Text("Snap goes to the level at once and leaves it at once. Ramp fades at the hub's rate, both ways.")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.tertiaryText)
                 }
             }
             .padding(.horizontal, 20)
@@ -272,6 +279,7 @@ private struct LightingCardView: View {
                         )
                         .font(Theme.caption)
                         .foregroundStyle(Theme.attention)
+                        .fixedSize(horizontal: false, vertical: true)
                         Spacer()
                         Button("Release") { confirmingRelease = hold }
                             .font(Theme.caption)
@@ -317,7 +325,6 @@ private struct LightingCardView: View {
                 .disabled(submitting)
                 .frame(maxWidth: 160)
                 .accessibilityIdentifier("lighting-transition-\(card.id)")
-                .accessibilityLabel("Transition")
 
                 Button {
                     Task { await hold() }
@@ -330,11 +337,6 @@ private struct LightingCardView: View {
                 .disabled(submitting || durationS == nil || client == nil)
                 .accessibilityIdentifier("lighting-hold-\(card.id)")
             }
-            // Below the row, a quiet caption in the file's existing
-            // footnote idiom — what snap/ramp actually mean at the pin.
-            Text("Snap goes to the level at once and leaves it at once. Ramp fades at the hub's rate, both ways.")
-                .font(Theme.caption)
-                .foregroundStyle(Theme.secondaryText)
 
             if let problem {
                 Label(problem.text, systemImage: "exclamationmark.triangle.fill")
@@ -420,7 +422,9 @@ private struct LightingCardView: View {
         var parts = [card.name]
         parts.append(card.reportedDuty.map { "\(Int($0 * 100)) percent" } ?? "no state yet")
         if let hold = currentHold() {
-            parts.append("held at \(Int(hold.duty * 100)) percent, \(Self.label(for: hold.transition).lowercased())")
+            parts.append(
+                "held at \(Int(hold.duty * 100)) percent, \(Self.label(for: hold.transition).lowercased()) transition"
+            )
         }
         return parts.joined(separator: ", ")
     }
