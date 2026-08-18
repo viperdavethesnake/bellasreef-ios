@@ -454,14 +454,14 @@ public actor HubClient {
             }
         }
 
-        init(_ payload: Components.Schemas.OverrideContext.TransitionPayload) {
+        public init(_ payload: Components.Schemas.OverrideContext.TransitionPayload) {
             switch payload {
             case .snap: self = .snap
             case .ramp: self = .ramp
             }
         }
 
-        init(_ payload: Components.Schemas.OverrideView.TransitionPayload) {
+        public init(_ payload: Components.Schemas.OverrideView.TransitionPayload) {
             switch payload {
             case .snap: self = .snap
             case .ramp: self = .ramp

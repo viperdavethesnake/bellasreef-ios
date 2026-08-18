@@ -147,6 +147,18 @@ private struct LightingCardView: View {
     @State private var proposedDuty: Double
     @State private var durationChoice: DurationChoice
     @State private var customMinutesText: String
+    /// The operator's snap-vs-ramp choice, remembered across cards and
+    /// launches (`@AppStorage`, spec 2026-08-17). First-run default is
+    /// snap — the complaint that started this was a hold taking ~100 s to
+    /// arrive. Stored as the wire string so a stale value can never decode
+    /// to something the hub would reject; anything unreadable falls back to
+    /// snap.
+    @AppStorage("lighting.holdTransition") private var transitionRaw: String = HubClient.HoldTransition.snap.rawValue
+
+    private var transition: HubClient.HoldTransition {
+        get { HubClient.HoldTransition(rawValue: transitionRaw) ?? .snap }
+        nonmutating set { transitionRaw = newValue.rawValue }
+    }
     /// Disables every control on this card while a Hold or Release is in
     /// flight (plan Task 2, Step 1).
     @State private var submitting = false
@@ -254,7 +266,7 @@ private struct LightingCardView: View {
                 if let hold = currentHold(now: context.date) {
                     HStack(alignment: .center) {
                         Label(
-                            "Held at \(Int(hold.duty * 100))% · "
+                            "Held at \(Int(hold.duty * 100))% · \(Self.label(for: hold.transition)) · "
                                 + "\(formatRemaining(secondsRemaining(hold, now: context.date)))",
                             systemImage: "hand.raised.fill"
                         )
@@ -294,16 +306,35 @@ private struct LightingCardView: View {
 
             durationRow
 
-            Button {
-                Task { await hold() }
-            } label: {
-                if submitting { ProgressView() } else { Text("Hold") }
+            HStack(spacing: 12) {
+                Picker("Transition", selection: Binding(
+                    get: { transition }, set: { transition = $0 }
+                )) {
+                    Text("Snap").tag(HubClient.HoldTransition.snap)
+                    Text("Ramp").tag(HubClient.HoldTransition.ramp)
+                }
+                .pickerStyle(.segmented)
+                .disabled(submitting)
+                .frame(maxWidth: 160)
+                .accessibilityIdentifier("lighting-transition-\(card.id)")
+                .accessibilityLabel("Transition")
+
+                Button {
+                    Task { await hold() }
+                } label: {
+                    if submitting { ProgressView() } else { Text("Hold") }
+                }
+                .buttonStyle(.borderedProminent)
+                .frame(minHeight: 44)
+                .frame(maxWidth: .infinity)
+                .disabled(submitting || durationS == nil || client == nil)
+                .accessibilityIdentifier("lighting-hold-\(card.id)")
             }
-            .buttonStyle(.borderedProminent)
-            .frame(minHeight: 44)
-            .frame(maxWidth: .infinity)
-            .disabled(submitting || durationS == nil || client == nil)
-            .accessibilityIdentifier("lighting-hold-\(card.id)")
+            // Below the row, a quiet caption in the file's existing
+            // footnote idiom — what snap/ramp actually mean at the pin.
+            Text("Snap goes to the level at once and leaves it at once. Ramp fades at the hub's rate, both ways.")
+                .font(Theme.caption)
+                .foregroundStyle(Theme.secondaryText)
 
             if let problem {
                 Label(problem.text, systemImage: "exclamationmark.triangle.fill")
@@ -389,7 +420,7 @@ private struct LightingCardView: View {
         var parts = [card.name]
         parts.append(card.reportedDuty.map { "\(Int($0 * 100)) percent" } ?? "no state yet")
         if let hold = currentHold() {
-            parts.append("held at \(Int(hold.duty * 100)) percent")
+            parts.append("held at \(Int(hold.duty * 100)) percent, \(Self.label(for: hold.transition).lowercased())")
         }
         return parts.joined(separator: ", ")
     }
@@ -472,7 +503,8 @@ private struct LightingCardView: View {
         defer { submitting = false }
         do {
             switch try await client.hold(
-                target: card.id, duty: proposedDuty / 100, durationS: durationS, reason: "manual"
+                target: card.id, duty: proposedDuty / 100, durationS: durationS, reason: "manual",
+                transition: transition
             ) {
             case let .granted(overrideView):
                 // Show this grant now, not on the next frame (review,
@@ -480,7 +512,8 @@ private struct LightingCardView: View {
                 // moment the frame catches up, so this is only ever the
                 // gap-filler.
                 optimisticHold = LightingCard.ActiveHold(
-                    id: overrideView.id, duty: overrideView.duty, expiresAt: overrideView.expiresAt
+                    id: overrideView.id, duty: overrideView.duty, expiresAt: overrideView.expiresAt,
+                    transition: HubClient.HoldTransition(overrideView.transition)
                 )
                 // Seed `releasedIDs` with whatever hold the frame currently
                 // shows, rather than clearing it (review round 2, 2026-08-15
@@ -528,6 +561,13 @@ private struct LightingCardView: View {
         case .oneHour: "1 h"
         case .fourHours: "4 h"
         case .eightHours: "8 h"
+        }
+    }
+
+    private static func label(for transition: HubClient.HoldTransition) -> String {
+        switch transition {
+        case .snap: "Snap"
+        case .ramp: "Ramp"
         }
     }
 }
