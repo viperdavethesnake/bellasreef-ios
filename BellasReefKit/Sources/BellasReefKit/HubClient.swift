@@ -437,11 +437,47 @@ public actor HubClient {
         case clockUntrusted
     }
 
+    /// How the hub moves a light to a held level and back — the operator's
+    /// choice per hold (backend spec 2026-08-17). `snap` is one step on
+    /// arrival AND on release/expiry; `ramp` is the hub's global slew both
+    /// ways. Hand-written wrapper over the generated
+    /// `OverrideRequest.TransitionPayload` so the view never touches a
+    /// generated enum name — the mapping below is the only place they meet.
+    public enum HoldTransition: String, CaseIterable, Sendable, Equatable {
+        case snap
+        case ramp
+
+        var payload: Components.Schemas.OverrideRequest.TransitionPayload {
+            switch self {
+            case .snap: .snap
+            case .ramp: .ramp
+            }
+        }
+
+        init(_ payload: Components.Schemas.OverrideContext.TransitionPayload) {
+            switch payload {
+            case .snap: self = .snap
+            case .ramp: self = .ramp
+            }
+        }
+
+        init(_ payload: Components.Schemas.OverrideView.TransitionPayload) {
+            switch payload {
+            case .snap: self = .snap
+            case .ramp: self = .ramp
+            }
+        }
+    }
+
     public func hold(
-        target: String, duty: Double, durationS: Double, reason: String
+        target: String, duty: Double, durationS: Double, reason: String,
+        transition: HoldTransition
     ) async throws -> HoldOutcome {
         switch try await client.createOverride(
-            body: .json(.init(durationS: durationS, duty: duty, reason: reason, target: target))
+            body: .json(.init(
+                durationS: durationS, duty: duty, reason: reason, target: target,
+                transition: transition.payload
+            ))
         ) {
         case let .ok(response): return .granted(try response.body.json)
         case .conflict: return .notCommandable

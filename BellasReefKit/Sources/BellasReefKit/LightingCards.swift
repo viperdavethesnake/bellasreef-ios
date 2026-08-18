@@ -33,11 +33,18 @@ public struct LightingCard: Equatable, Identifiable, Sendable {
         public let id: String
         public let duty: Double
         public let expiresAt: Date
+        /// How this hold arrives and how it will leave — snap or ramp
+        /// (backend spec 2026-08-17). Off `OverrideContext.transition`,
+        /// required on the wire, so always present whenever `hold` is.
+        public let transition: HubClient.HoldTransition
 
-        public init(id: String, duty: Double, expiresAt: Date) {
+        public init(
+            id: String, duty: Double, expiresAt: Date, transition: HubClient.HoldTransition
+        ) {
             self.id = id
             self.duty = duty
             self.expiresAt = expiresAt
+            self.transition = transition
         }
     }
 
@@ -87,7 +94,10 @@ public func lightingCards(
                 name: device.displayName ?? device.deviceId,
                 reportedDuty: frame.map(reportedDuty(from:)),
                 hold: frame?.override.map {
-                    LightingCard.ActiveHold(id: $0.id, duty: $0.duty, expiresAt: $0.expiresAt)
+                    LightingCard.ActiveHold(
+                        id: $0.id, duty: $0.duty, expiresAt: $0.expiresAt,
+                        transition: HubClient.HoldTransition($0.transition)
+                    )
                 },
                 maxRuntimeS: device.maxRuntimeS
             )

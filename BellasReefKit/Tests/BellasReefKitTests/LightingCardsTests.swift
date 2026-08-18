@@ -63,13 +63,15 @@ private enum LightingFixtures {
 
     static func override(
         id: String = "8f14e45f-ceea-467e-9575-6e3c8e9caeb2", duty: Double = 0.6,
-        expiresInS: Double = 1200
+        expiresInS: Double = 1200,
+        transition: Components.Schemas.OverrideContext.TransitionPayload = .ramp
     ) -> Components.Schemas.OverrideContext {
         .init(
             duty: duty,
             expiresAt: Date(timeIntervalSince1970: 1_786_343_122 + 1200),
             expiresInS: expiresInS,
-            id: id
+            id: id,
+            transition: transition
         )
     }
 }
@@ -129,15 +131,30 @@ struct LightingCardsTests {
     @Test("a frame carrying an override shows the active hold — duty and remaining")
     func frameWithOverrideShowsHold() {
         let device = LightingFixtures.device(id: "light-1")
-        let override = LightingFixtures.override(duty: 0.6, expiresInS: 1200)
+        let override = LightingFixtures.override(duty: 0.6, expiresInS: 1200, transition: .snap)
         let frame = LightingFixtures.frame(id: "light-1", duty: 0.6, override: override)
         let cards = lightingCards(devices: [device], frames: ["light-1": frame])
 
         #expect(cards.count == 1)
         #expect(cards[0].hold == LightingCard.ActiveHold(
             id: "8f14e45f-ceea-467e-9575-6e3c8e9caeb2", duty: 0.6,
-            expiresAt: Date(timeIntervalSince1970: 1_786_343_122 + 1200)
+            expiresAt: Date(timeIntervalSince1970: 1_786_343_122 + 1200),
+            transition: .snap
         ))
+    }
+
+    @Test("the hold's transition comes off the frame, ramp and snap alike")
+    func holdTransitionOffTheFrame() {
+        let device = LightingFixtures.device(id: "light-1")
+        for (wire, expected) in [
+            (Components.Schemas.OverrideContext.TransitionPayload.ramp, HubClient.HoldTransition.ramp),
+            (.snap, .snap),
+        ] {
+            let frame = LightingFixtures.frame(
+                id: "light-1", override: LightingFixtures.override(transition: wire))
+            let cards = lightingCards(devices: [device], frames: ["light-1": frame])
+            #expect(cards[0].hold?.transition == expected)
+        }
     }
 
     @Test("cards are sorted like equipmentRows sorts — by device id, not display name")
@@ -184,7 +201,7 @@ struct EffectiveHoldTests {
     private static func hold(
         id: String, duty: Double = 0.5, expiresIn seconds: Double
     ) -> LightingCard.ActiveHold {
-        .init(id: id, duty: duty, expiresAt: now.addingTimeInterval(seconds))
+        .init(id: id, duty: duty, expiresAt: now.addingTimeInterval(seconds), transition: .ramp)
     }
 
     @Test("a frame with a hold wins over an optimistic one, even when both are present")

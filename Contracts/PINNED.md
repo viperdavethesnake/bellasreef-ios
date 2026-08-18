@@ -6,11 +6,11 @@ reviewable diff rather than something that shifts under the app.
 
 | | |
 |---|---|
-| Backend commit | `70a78ce` |
-| CI run | exported locally from `70a78ce`'s committed `openapi.json`; re-pin from the artifact once that run is green |
-| Pinned on | 2026-08-15 |
+| Backend commit | `91742b8` |
+| CI run | [`32085994939`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/32085994939) (`client-contracts` artifact) |
+| Pinned on | 2026-08-17 |
 | OpenAPI | 3.1.0, 23 paths |
-| Contracts version | 3.7.0 |
+| Contracts version | 3.8.0 |
 | Frame schema | v1 |
 
 ## Refreshing
@@ -76,3 +76,20 @@ that hand-builds a `DeviceView` fixture
 actuator. `HubClient.pair(clientName:)`'s switch gained a `.tooManyRequests`
 case; the dropped typed 422 body needed no call-site change because the
 existing `.unprocessableContent` case never read the body.
+
+## What 3.7.0 → 3.8.0 added
+
+Hold transition (backend spec 2026-08-17): an override carries how the light
+moves to it and away from it.
+
+| Symbol | Why it was missing from the app |
+|---|---|
+| `OverrideRequest.transition` (`snap` \| `ramp`, server default `ramp`) | the Lighting tab had no way to ask for a snap; every hold slewed at 1 %/s |
+| `OverrideView.transition` (required) | the grant echoes what was asked, so the optimistic hold row can show it |
+| `OverrideContext.transition` (required, on every state frame's `override`) | the active-hold row can say what will happen at release/expiry |
+
+Additive. `OverrideView.transition` and `OverrideContext.transition` being
+required broke the kit's hand-built fixtures (`OverrideTests` JSON stubs,
+`LightingFixtures.override`) — updated to carry it, and `HubClient.hold`
+gained a `transition:` parameter so the app always sends the choice
+explicitly rather than relying on the server default.
