@@ -407,12 +407,7 @@ struct SystemView: View {
     /// as `ch 28-000000bfe244`. The number is 1-based for the reader and
     /// 0-based on the wire — see `ChannelLabel`.
     private func deviceSubtitle(_ device: Components.Schemas.DeviceView) -> String {
-        var parts = [device.driverId]
-        if let channel = device.channel {
-            parts.append(Int(channel) != nil ? "ch \(ChannelLabel.humanNumber(channel))" : channel)
-        }
-        if let role = device.role { parts.append(role) }
-        return parts.joined(separator: " · ")
+        DeviceSubtitle.text(driverId: device.driverId, channel: device.channel, role: device.role)
     }
 
     @ViewBuilder
