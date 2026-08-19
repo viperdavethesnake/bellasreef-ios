@@ -117,6 +117,14 @@ public final class HistoryModel {
     /// contract change and it is not this one.
     public private(set) var gapFloor: TimeInterval?
 
+    /// The bucket size the hub actually used, in seconds.
+    ///
+    /// Kept beside `gapFloor` rather than derived from it: the scrub readout
+    /// (`HistoryScrub.bucket(at:in:step:)`) needs the step itself to decide
+    /// how far a finger may be from a bucket, and dividing the tolerance back
+    /// out would tie the readout to a multiplier it has no business knowing.
+    public private(set) var bucketStep: TimeInterval?
+
     public var range: HistoryRange = .day {
         didSet { reload() }
     }
@@ -195,6 +203,7 @@ public final class HistoryModel {
             // Segmenting on the requested size would tear a series apart the
             // moment the cap changed the step.
             let step = TimeInterval(view.bucketS ?? 60)
+            bucketStep = step
             gapFloor = Self.tolerance(step: step)
             traces = view.series.map { series in
                 HistoryTrace(
