@@ -318,7 +318,16 @@ public final class TankMonitor {
             apply(sensor.payload)
         case let .state(state):
             connection = .live
-            channels[state.payload.actuatorId] = state
+            // Never regress. The hub replays each actuator's last known state
+            // on connect and then joins the live fan-out; a change that lands
+            // in between arrives *after* its own replayed predecessor. Keep
+            // the newer by `emitted_at` — a stale frame must not overwrite a
+            // fresh one (H3, 2026-08-18).
+            let id = state.payload.actuatorId
+            if let held = channels[id], held.payload.emittedAt > state.payload.emittedAt {
+                return
+            }
+            channels[id] = state
         case let .alert(alert):
             connection = .live
             apply(alert.payload)
