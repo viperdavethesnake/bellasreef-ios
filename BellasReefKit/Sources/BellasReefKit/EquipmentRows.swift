@@ -49,7 +49,8 @@ public enum EquipmentRow: Equatable, Identifiable {
 public func equipmentRows(
     devices: [Components.Schemas.DeviceView],
     frames: [String: Components.Schemas.StateFrame],
-    roles: [String: String]
+    roles: [String: String],
+    registryLoaded: Bool = false
 ) -> [(role: String, rows: [EquipmentRow])] {
     var byRole: [String: [EquipmentRow]] = [:]
     var accountedFor: Set<String> = []
@@ -57,6 +58,16 @@ public func equipmentRows(
     let adopted = devices
         .filter { $0.actuatorClass != nil && $0.adopted == true }
         .sorted { $0.deviceId < $1.deviceId }
+    // A frame for a device the registry knows and says is not adopted is a
+    // stale frame, not equipment: the channel is under nobody's command, and
+    // the frame is the safe-state publish from the unadopt itself
+    // (2026-08-18: "Other Light" sat under Unassigned at 0 % after David
+    // unadopted it). Once the registry has loaded, the same goes for a frame
+    // nobody in the registry answers to. Before it has loaded, an unknown
+    // frame still shows — that load race is what the fall-through below was
+    // written for.
+    let notAdopted = Set(devices.filter { $0.adopted != true }.map(\.deviceId))
+    let known = Set(devices.map(\.deviceId))
 
     for device in adopted {
         let id = device.deviceId
@@ -72,18 +83,20 @@ public func equipmentRows(
     }
 
     for (id, frame) in frames where !accountedFor.contains(id) {
+        if notAdopted.contains(id) { continue }
+        if registryLoaded && !known.contains(id) { continue }
         let role = roles[id] ?? ""
         byRole[role, default: []].append(.reporting(id: id, name: id, frame: frame))
     }
 
-    let known = ["light", "heater", "pump", "doser", "outlet"]
+    let husbandry = ["light", "heater", "pump", "doser", "outlet"]
     var out: [(role: String, rows: [EquipmentRow])] = []
-    for role in known {
+    for role in husbandry {
         guard let rows = byRole[role], !rows.isEmpty else { continue }
         out.append((role: role, rows: rows.sorted { $0.id < $1.id }))
     }
     for (role, rows) in byRole.sorted(by: { $0.key < $1.key })
-    where !known.contains(role) && !rows.isEmpty {
+    where !husbandry.contains(role) && !rows.isEmpty {
         out.append((role: role, rows: rows.sorted { $0.id < $1.id }))
     }
     return out

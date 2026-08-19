@@ -560,7 +560,10 @@ struct ActuatorSections: View {
     /// `equipmentRows` — grouping/ordering is that function's job, not
     /// duplicated here. This view only adds the operator-facing titles.
     private var sections: [(role: String, title: String, rows: [EquipmentRow])] {
-        equipmentRows(devices: catalog.devices, frames: monitor.channels, roles: monitor.roles)
+        equipmentRows(
+            devices: catalog.devices, frames: monitor.channels, roles: monitor.roles,
+            registryLoaded: catalog.state == .loaded
+        )
             .map { (role: $0.role, title: Self.title(for: $0.role), rows: $0.rows) }
     }
 
