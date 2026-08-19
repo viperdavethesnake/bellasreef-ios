@@ -131,6 +131,20 @@ public final class HubDiscovery {
         self.browser = browser
     }
 
+    /// Browse for a bounded time and return whatever answered.
+    ///
+    /// For rediscovery (`HubRediscovery`): a hub that has moved answers mDNS
+    /// well inside a few seconds; one that has not answered by then is not
+    /// going to, and the caller's socket is already retrying on its own.
+    public static func browse(for seconds: TimeInterval) async -> [Hub] {
+        let discovery = HubDiscovery()
+        discovery.start()
+        try? await Task.sleep(for: .seconds(seconds))
+        let found = discovery.hubs
+        discovery.stop()
+        return found
+    }
+
     public func stop() {
         retry?.cancel()
         retry = nil

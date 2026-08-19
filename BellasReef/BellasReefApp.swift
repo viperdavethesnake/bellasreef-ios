@@ -92,8 +92,12 @@ final class AppModel {
                 Task { @MainActor in self?.credentialRejected() }
             }
         }
+        // A previous monitor (a rediscovery re-adopting at a new address)
+        // must stop retrying the old one, or two loops run for one hub.
+        self.monitor?.stop()
         let monitor = TankMonitor(client: client, stream: StreamClient(baseURL: hub.baseURL))
         monitor.onCredentialRejected = { [weak self] in self?.credentialRejected() }
+        monitor.onUnreachable = { [weak self] in await self?.rediscover() }
         self.monitor = monitor
         let catalog = DeviceCatalog(client: client)
         self.catalog = catalog
@@ -103,6 +107,36 @@ final class AppModel {
         notice = nil
         phase = .paired(hub)
         monitor.start()
+    }
+
+    /// When the last rediscovery ran, so a hub that is simply off for the
+    /// evening is browsed for once a minute, not once per backoff tick.
+    private var lastRediscovery: Date = .distantPast
+
+    /// The stored address stopped answering: browse for the hub and follow it
+    /// if it has moved (UX review B7). The address the app keeps is the one
+    /// discovery resolved to — an IP, on purpose — and the hub is on DHCP, so
+    /// a lease change used to mean a dead app until the operator re-paired.
+    /// The pairing credential is keyed to this device, not the address, so
+    /// following the hub keeps the pairing.
+    ///
+    /// Conservative on purpose: one hub at a new address is followed; among
+    /// several, only one whose Bonjour name is ours; otherwise stay — the
+    /// monitor keeps retrying the old address, and the pairing screen is a
+    /// tap away for the operator to point it somewhere by hand.
+    func rediscover() async {
+        guard case let .paired(hub) = phase else { return }
+        guard Date().timeIntervalSince(lastRediscovery) > 60 else { return }
+        lastRediscovery = Date()
+        let found = await HubDiscovery.browse(for: 5)
+        guard case .paired = phase,  // still paired after the wait
+              let moved = HubRediscovery.choose(candidates: found, current: hub)
+        else { return }
+        // Keep the name the hub told us; the Bonjour instance name is a
+        // label for the row on the pairing screen, not the hub's own name.
+        let followed = Hub(name: hub.name, baseURL: moved.baseURL, discovered: true)
+        HubMemory.remember(followed, clientId: HubMemory.recallClientId())
+        adopt(HubClient(hub: followed), hub: followed)
     }
 
     /// The hub refused this device's credential: revoked, or the hub was

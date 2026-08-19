@@ -120,6 +120,13 @@ public final class TankMonitor {
     /// hands it up rather than reaching for `AppModel` from inside the package.
     public var onCredentialRejected: (@MainActor () -> Void)?
 
+    /// Called when a connect attempt failed because the hub's *address* did not
+    /// answer (`HubRediscovery.isUnreachable`) — never for auth, contract or a
+    /// hub that answered with a refusal. The app decides whether to browse for
+    /// the hub at a new address (UX review B7); the monitor keeps retrying the
+    /// old one meanwhile, so nothing here blocks or replaces its own backoff.
+    public var onUnreachable: (@MainActor () async -> Void)?
+
     /// How many samples the sparkline keeps. ~25 minutes at the DS18B20's
     /// honest cadence; enough to see a trend, not enough to be a chart.
     private let historyLimit = 300
@@ -273,6 +280,9 @@ public final class TankMonitor {
                 }
             } catch {
                 connection = .disconnected(error.localizedDescription)
+                if HubRediscovery.isUnreachable(error) {
+                    await onUnreachable?()
+                }
             }
 
             guard !Task.isCancelled else { return }
