@@ -290,6 +290,27 @@ struct TraceChart: View {
                         .foregroundStyle(Theme.accent.opacity(0.18))
                         .interpolationMethod(.monotone)
                     }
+                    // A segment of one bucket has no line to draw — a
+                    // LineMark with one point renders nothing, and neither
+                    // does the AreaMark — so a lone reading vanished (H2,
+                    // 2026-08-18: today's hold missing from 24H and 7D while
+                    // VictoriaMetrics had it). One dot, with its envelope as a
+                    // short bar, says "this happened, once, here".
+                    if segment.buckets.count == 1, let only = segment.buckets.first {
+                        RuleMark(
+                            x: .value("t", only.at),
+                            yStart: .value("low", display(only.minimum)),
+                            yEnd: .value("high", display(only.maximum))
+                        )
+                        .foregroundStyle(Theme.accent.opacity(0.35))
+                        .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round))
+                        PointMark(
+                            x: .value("t", only.at),
+                            y: .value("avg", display(only.average))
+                        )
+                        .foregroundStyle(Theme.accent)
+                        .symbolSize(28)
+                    }
                     // One line per segment: a gap in the data is a gap in the
                     // line, never a straight edge across missing time.
                     ForEach(segment.buckets, id: \.at) { bucket in
