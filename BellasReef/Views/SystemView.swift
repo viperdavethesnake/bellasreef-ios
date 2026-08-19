@@ -292,6 +292,18 @@ struct SystemView: View {
                         .font(Theme.caption)
                         .foregroundStyle(Theme.attention)
                 }
+                // A footer row, not a `.safeAreaInset(edge: .bottom)`: that
+                // inset, under a TabView with tabBarMinimizeBehavior, put
+                // UIKit's navigation transition into a safe-area layout loop
+                // (100 % CPU, every later push/pop dead — 2026-08-18 22:04).
+                Section {
+                    EmptyView()
+                } footer: {
+                    Text("Adopting a channel makes it a device the engine may command. "
+                         + "Controls live on the tab that uses the device. Channels are "
+                         + "numbered from 1 here; boards print them from 0, so channel 1 "
+                         + "is a board's 0.")
+                }
             } else if hardwareFailed {
                 Text("Could not ask the hub what hardware it has.")
                     .font(Theme.caption)
@@ -304,17 +316,6 @@ struct SystemView: View {
         .reefBackground()
         .navigationTitle("Hardware")
         .refreshable { await loadHardware() }
-        .safeAreaInset(edge: .bottom) {
-            Text("Adopting a channel makes it a device the engine may command. Controls "
-                 + "live on the tab that uses the device. Channels are numbered from 1 "
-                 + "here; boards print them from 0, so channel 1 is a board's 0.")
-                .font(Theme.caption)
-                .foregroundStyle(Theme.tertiaryText)
-                .padding(.horizontal, 20)
-                .padding(.vertical, 8)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(Theme.base)
-        }
     }
 
     /// Who may talk to the hub, and this device's own way out.
