@@ -1,5 +1,6 @@
 // Bella's Reef iOS — closed source.
 
+import Accessibility
 import BellasReefAPI
 import BellasReefKit
 import Charts
@@ -180,6 +181,16 @@ struct TraceChart: View {
 
     @Environment(AppModel.self) private var model
 
+    /// Where the finger is, while it is down. `nil` is the chart at rest.
+    @State private var scrubbedAt: Date?
+
+    /// The bucket under the finger, or `nil` over a gap (UX review B4).
+    /// Decided in the kit, where it has tests; this only asks.
+    private var scrubbedBucket: Components.Schemas.HistoryBucket? {
+        guard let scrubbedAt, let step = history.bucketStep else { return nil }
+        return HistoryScrub.bucket(at: scrubbedAt, in: trace.segments, step: step)
+    }
+
     private var unit: TemperatureUnitPreference {
         model.preferences?.temperatureUnit ?? .automatic
     }
@@ -323,6 +334,41 @@ struct TraceChart: View {
                         .interpolationMethod(.monotone)
                     }
                 }
+
+                // The scrub crosshair (UX review B4). The rule follows the
+                // finger; the dot marks the bucket it resolves to. Over a gap
+                // there is no dot and the readout says so — snapping to the
+                // nearest edge would put a number on time nothing was
+                // recorded for, and the torn line already refused to.
+                if let scrubbedAt {
+                    RuleMark(x: .value("scrub", scrubbedAt))
+                        .foregroundStyle(Theme.secondaryText.opacity(0.7))
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                        .annotation(
+                            position: .top, spacing: 0,
+                            // Kept inside the plot on both axes: the chart is
+                            // 180pt tall with a header directly above it, and
+                            // a readout that escaped upward would sit on the
+                            // device name.
+                            overflowResolution: .init(x: .fit(to: .plot), y: .fit(to: .plot))
+                        ) {
+                            ScrubReadout(
+                                at: scrubbedBucket?.at ?? scrubbedAt,
+                                bucket: scrubbedBucket,
+                                range: history.range,
+                                unit: axisLabel,
+                                display: display
+                            )
+                        }
+                    if let bucket = scrubbedBucket {
+                        PointMark(
+                            x: .value("t", bucket.at),
+                            y: .value("avg", display(bucket.average))
+                        )
+                        .foregroundStyle(Theme.accent)
+                        .symbolSize(48)
+                    }
+                }
             }
             .chartYScale(domain: yDomain)
             // The x domain is the range the operator picked, not the extent of
@@ -361,7 +407,46 @@ struct TraceChart: View {
             // was dropping was today's.
             .chartPlotStyle { $0.padding(.trailing, 26) }
             .frame(height: 180)
+            // A drag across the plot scrubs; lifting the finger clears it.
+            //
+            // A plain `DragGesture` at its default 10pt threshold, not
+            // `minimumDistance: 0`: this chart lives in a vertical
+            // ScrollView, and a drag that claims the touch on contact would
+            // either steal every scroll that starts on a chart or be
+            // cancelled mid-scrub without `onEnded` ever firing, leaving the
+            // crosshair stuck. At 10pt the scroll view takes a vertical
+            // pull before this begins, and once this has begun a horizontal
+            // move it keeps it.
+            .chartOverlay { proxy in
+                GeometryReader { geometry in
+                    Rectangle().fill(.clear).contentShape(Rectangle())
+                        .gesture(
+                            DragGesture()
+                                .onChanged { drag in
+                                    guard let plot = proxy.plotFrame,
+                                          let window = history.window else { return }
+                                    let x = drag.location.x - geometry[plot].origin.x
+                                    guard let at = proxy.value(atX: x, as: Date.self) else { return }
+                                    // Clamped to the picked range: a finger
+                                    // dragged past the plot edge must not
+                                    // put the rule outside the window the
+                                    // axis promised.
+                                    scrubbedAt = min(max(at, window.lowerBound), window.upperBound)
+                                }
+                                .onEnded { _ in scrubbedAt = nil }
+                        )
+                }
+            }
             .accessibilityLabel(Self.spoken(trace: trace, history: history))
+            .accessibilityChartDescriptor(
+                AudioGraph(
+                    trace: trace,
+                    window: history.window,
+                    range: history.range,
+                    unit: unit,
+                    yDomain: yDomain
+                )
+            )
 
             Footnote(trace: trace, history: history)
         }
@@ -450,6 +535,112 @@ struct Footnote: View {
 }
 
 
+/// What the crosshair is pointing at: the bucket's time, its average, and
+/// its low–high; or the plain fact that nothing was recorded there.
+struct ScrubReadout: View {
+    let at: Date
+    let bucket: Components.Schemas.HistoryBucket?
+    let range: HistoryRange
+    let unit: String
+    let display: (Double) -> Double
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(at, format: range.readoutFormat)
+                .foregroundStyle(Theme.secondaryText)
+            if let bucket {
+                // Average first and heaviest — it is the line the finger is
+                // on. The envelope follows in the same breath so a spike the
+                // line averaged away is still named.
+                HStack(spacing: 6) {
+                    Text(HistoryScrub.label(display(bucket.average), unit: unit))
+                        .foregroundStyle(Theme.primaryText)
+                        .fontWeight(.semibold)
+                    Text(HistoryScrub.label(display(bucket.minimum), unit: unit)
+                         + "–" + HistoryScrub.label(display(bucket.maximum), unit: unit))
+                        .foregroundStyle(Theme.tertiaryText)
+                }
+            } else {
+                Text("Nothing recorded")
+                    .foregroundStyle(Theme.tertiaryText)
+            }
+        }
+        .font(Theme.caption.monospacedDigit())
+        .padding(.horizontal, 8)
+        .padding(.vertical, 5)
+        .background(Theme.surfaceRaised.opacity(0.92), in: .rect(cornerRadius: 8))
+        // The chart's own accessibility label and descriptor speak for it;
+        // a transient readout under a finger is not a second element.
+        .accessibilityHidden(true)
+    }
+}
+
+/// The chart, for VoiceOver's audio graph (UX review B4).
+///
+/// Its own struct rather than a conformance on `TraceChart`:
+/// `makeChartDescriptor()` is nonisolated and `TraceChart` is not, so this
+/// carries plain values captured at render time and touches nothing on the
+/// main actor when the graph is played.
+struct AudioGraph: AXChartDescriptorRepresentable {
+    let trace: HistoryTrace
+    let window: ClosedRange<Date>?
+    let range: HistoryRange
+    let unit: TemperatureUnitPreference
+    let yDomain: ClosedRange<Double>
+
+    /// The same conversion the plot uses, so the graph and the picture agree.
+    private func display(_ value: Double) -> Double {
+        guard trace.isTemperature else { return value * 100 }
+        return TemperatureDisplay.measurement(celsius: value, as: unit).value
+    }
+
+    func makeChartDescriptor() -> AXChartDescriptor {
+        // The x axis is the picked range, same as the plot; a graph whose
+        // width was the data's extent would redefine "7 days" the same way
+        // an inferred domain did.
+        let lower = window?.lowerBound ?? trace.segments.first?.buckets.first?.at ?? Date()
+        let upper = window?.upperBound ?? trace.segments.last?.buckets.last?.at ?? lower
+        let format = range.readoutFormat
+        let xAxis = AXNumericDataAxisDescriptor(
+            title: "Time",
+            range: lower.timeIntervalSince1970...max(upper.timeIntervalSince1970, lower.timeIntervalSince1970 + 1),
+            gridlinePositions: []
+        ) { Date(timeIntervalSince1970: $0).formatted(format) }
+
+        let symbol = trace.isTemperature ? TemperatureDisplay.symbol(for: unit) : "%"
+        let yAxis = AXNumericDataAxisDescriptor(
+            title: trace.isTemperature ? "Temperature" : "Output",
+            range: yDomain,
+            gridlinePositions: []
+        ) { HistoryScrub.label($0, unit: symbol) }
+
+        // One series per segment, not one for the trace: the audio graph
+        // sweeps a continuous series from point to point, and a single one
+        // would sound a tone straight across a gap the line refuses to draw.
+        // Named by part only when there is more than one, so an unbroken
+        // record is just "Average".
+        let parts = trace.segments.count
+        let series = trace.segments.enumerated().map { index, segment in
+            AXDataSeriesDescriptor(
+                name: parts > 1 ? "Average, part \(index + 1) of \(parts)" : "Average",
+                isContinuous: segment.buckets.count > 1,
+                dataPoints: segment.buckets.map { bucket in
+                    AXDataPoint(x: bucket.at.timeIntervalSince1970, y: display(bucket.average))
+                }
+            )
+        }
+
+        return AXChartDescriptor(
+            title: "\(trace.name) history",
+            summary: nil,
+            xAxis: xAxis,
+            yAxis: yAxis,
+            additionalAxes: [],
+            series: series
+        )
+    }
+}
+
 /// Axis presentation for a range.
 ///
 /// In the view layer, not in HistoryModel: `AxisMarkValues` is a Charts
@@ -488,6 +679,17 @@ extension HistoryRange {
         switch self {
         case .week: .dateTime.weekday(.abbreviated)
         case .day: .dateTime.hour()
+        default: .dateTime.hour().minute()
+        }
+    }
+
+    /// The scrub readout's time: the axis format, plus enough to tell one
+    /// bucket from the next. 7D adds a clock to the weekday; 1H buckets are
+    /// 30 s wide, so a minute alone would name two of them the same.
+    var readoutFormat: Date.FormatStyle {
+        switch self {
+        case .week: .dateTime.weekday(.abbreviated).hour().minute()
+        case .hour: .dateTime.hour().minute().second()
         default: .dateTime.hour().minute()
         }
     }
