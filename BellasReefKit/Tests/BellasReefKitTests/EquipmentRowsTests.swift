@@ -62,6 +62,37 @@ struct EquipmentRowsTests {
         #expect(sections[0].rows == [.adoptedSilent(id: "light-1", name: "Display light")])
     }
 
+    /// 2026-08-18: David unadopted "Other Light" from System and its last
+    /// frame — the safe-state publish on the way down, 0 % — sat under
+    /// "Unassigned" on Tank until the app restarted. A channel the registry
+    /// says is not adopted is under nobody's command; its stale frame is not
+    /// equipment. A frame for a device the registry does not know at all
+    /// still shows (the load-race case the rule was written for).
+    @Test("a frame for a device the registry knows is not adopted is dropped")
+    func detachedFrameDropped() {
+        let detached = EquipmentFixtures.device(id: "pi-pwm-1", name: "Other Light", adopted: false)
+        let frame = EquipmentFixtures.frame(id: "pi-pwm-1")
+        let sections = equipmentRows(devices: [detached], frames: ["pi-pwm-1": frame], roles: [:])
+        #expect(sections.isEmpty)
+    }
+
+    @Test("before the registry has loaded, a frame for an unknown device still shows")
+    func unknownFrameShowsWhileLoading() {
+        let frame = EquipmentFixtures.frame(id: "mystery-0")
+        let sections = equipmentRows(devices: [], frames: ["mystery-0": frame], roles: [:])
+        #expect(sections.count == 1)
+        #expect(sections[0].rows == [.reporting(id: "mystery-0", name: "mystery-0", frame: frame)])
+    }
+
+    @Test("once the registry has loaded, a frame nobody in it answers to is dropped")
+    func unknownFrameDroppedOnceLoaded() {
+        let frame = EquipmentFixtures.frame(id: "mystery-0")
+        let sections = equipmentRows(
+            devices: [], frames: ["mystery-0": frame], roles: [:], registryLoaded: true
+        )
+        #expect(sections.isEmpty)
+    }
+
     @Test("an adopted actuator with a frame renders as reporting, once")
     func adoptedWithFrame() {
         let device = EquipmentFixtures.device(id: "light-1", name: "Display light")

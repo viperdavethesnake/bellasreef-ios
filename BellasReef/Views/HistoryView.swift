@@ -30,6 +30,9 @@ struct HistoryTabView: View {
             }
             .reefBackground()
             .navigationTitle("History")
+            // Inline titles blurred over content that scrolled under them (UX
+            // review B2). The soft edge effect is the system's answer.
+            .scrollEdgeEffectStyle(.soft, for: .top)
         }
         .task {
             // Runs on every appearance, not only on creation: SwiftUI cancels
@@ -75,6 +78,18 @@ struct HistoryTabView: View {
                 case .empty:
                     Empty(range: history.range)
                 case .loaded:
+                    // A mostly-empty window says why, once, above the charts
+                    // (UX review B6). The axis stays the picked range — 7D
+                    // means seven days — and this names where the record
+                    // starts instead of clamping the plot to it.
+                    if let window = history.window,
+                       let caption = WindowCoverage.caption(
+                           window: window, firstDataAt: history.firstDataAt
+                       ) {
+                        Text(caption)
+                            .font(Theme.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                    }
                     ForEach(history.traces) { trace in
                         TraceChart(trace: trace, history: history)
                     }
@@ -275,6 +290,27 @@ struct TraceChart: View {
                         .foregroundStyle(Theme.accent.opacity(0.18))
                         .interpolationMethod(.monotone)
                     }
+                    // A segment of one bucket has no line to draw — a
+                    // LineMark with one point renders nothing, and neither
+                    // does the AreaMark — so a lone reading vanished (H2,
+                    // 2026-08-18: today's hold missing from 24H and 7D while
+                    // VictoriaMetrics had it). One dot, with its envelope as a
+                    // short bar, says "this happened, once, here".
+                    if segment.buckets.count == 1, let only = segment.buckets.first {
+                        RuleMark(
+                            x: .value("t", only.at),
+                            yStart: .value("low", display(only.minimum)),
+                            yEnd: .value("high", display(only.maximum))
+                        )
+                        .foregroundStyle(Theme.accent.opacity(0.35))
+                        .lineStyle(StrokeStyle(lineWidth: 3, lineCap: .round))
+                        PointMark(
+                            x: .value("t", only.at),
+                            y: .value("avg", display(only.average))
+                        )
+                        .foregroundStyle(Theme.accent)
+                        .symbolSize(28)
+                    }
                     // One line per segment: a gap in the data is a gap in the
                     // line, never a straight edge across missing time.
                     ForEach(segment.buckets, id: \.at) { bucket in
@@ -367,16 +403,22 @@ struct Footnote: View {
 
     var body: some View {
         let gaps = max(0, trace.segments.count - 1)
-        let bands = history.bands(for: trace.deviceId).count
+        let phrases = EpisodeSummary.phrases(for: history.bands(for: trace.deviceId))
         let floor = history.gapFloor.map(Self.resolution)
 
+        VStack(alignment: .leading, spacing: 4) {
         HStack(spacing: 12) {
-            if bands > 0 {
+            // Per class, tinted like the band it counts (UX review A2): a
+            // silence is violet on the chart and violet here; a threshold
+            // excursion is amber in both places.
+            ForEach(phrases, id: \.text) { phrase in
                 Label(
-                    bands == 1 ? "1 alert episode" : "\(bands) alert episodes",
-                    systemImage: "exclamationmark.triangle.fill"
+                    phrase.text,
+                    systemImage: phrase.alertClass == .silence
+                        ? "antenna.radiowaves.left.and.right.slash"
+                        : "exclamationmark.triangle.fill"
                 )
-                .foregroundStyle(Theme.attention)
+                .foregroundStyle(phrase.alertClass == .silence ? Theme.silence : Theme.attention)
             }
             if gaps > 0 {
                 // Named rather than left to be inferred from a broken line: a
@@ -396,6 +438,12 @@ struct Footnote: View {
                 .foregroundStyle(Theme.tertiaryText)
             }
             Spacer()
+        }
+        // The pale band was the one unexplained mark on the chart (UX review
+        // B5). One line, beside the gap disclosure so the two explanations of
+        // what the plot does and does not show sit together.
+        Text("The shaded band is each interval's low to high; the line is its average.")
+            .foregroundStyle(Theme.tertiaryText)
         }
         .font(Theme.caption)
     }

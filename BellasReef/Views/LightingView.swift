@@ -32,6 +32,9 @@ struct LightingView: View {
             }
             .reefBackground()
             .navigationTitle("Lighting")
+            // Inline titles blurred over content that scrolled under them (UX
+            // review B2). The soft edge effect is the system's answer.
+            .scrollEdgeEffectStyle(.soft, for: .top)
         }
     }
 
@@ -50,7 +53,7 @@ struct LightingView: View {
                 // the same `StatusLine` TankView leads with, unmodified: it
                 // is driven purely by `monitor.tone`/`monitor.statusLine`,
                 // nothing tab-specific.
-                StatusLine(monitor: monitor)
+                StatusLine(monitor: monitor, catalog: catalog)
 
                 if cards.isEmpty {
                     emptyState(catalog: catalog)
@@ -173,6 +176,8 @@ private struct LightingCardView: View {
     /// Toggled on a granted hold to fire the success haptic (design brief
     /// §7.4: "Overrides ... confirm with haptics").
     @State private var successPulse = 0
+    /// Bumped on every Hold tap for the `.selection` haptic (UX review B8).
+    @State private var holdTapped = 0
 
     /// A Hold's own grant response, shown immediately rather than waiting on
     /// the next state frame (review, 2026-08-15: `HoldOutcome.granted`
@@ -304,12 +309,29 @@ private struct LightingCardView: View {
                         .font(Theme.value)
                         .foregroundStyle(Theme.accent)
                 }
-                Slider(value: $proposedDuty, in: 0...100, step: 1)
+                // Snap on release, not while dragging: the thumb should go
+                // where the finger is, and then land where the hub would put
+                // it (UX review A6). The value the operator sees is the value
+                // the pin gets.
+                Slider(value: $proposedDuty, in: 0...100, step: 1) { editing in
+                    if !editing { proposedDuty = Dimming.snapPercent(proposedDuty) }
+                }
                     .disabled(submitting)
                     .tint(Theme.accent)
                     .accessibilityIdentifier("lighting-slider-\(card.id)")
                     .accessibilityLabel("\(card.name), proposed duty")
                     .accessibilityValue("\(Int(proposedDuty)) percent")
+                // A proposal is a pending choice, not a state report (UX review
+                // A4). Say so whenever it differs from what the hub reports;
+                // say what will happen when it sits under the floor.
+                if let caption = Dimming.proposalCaption(
+                    proposedPercent: proposedDuty, reportedDuty: card.reportedDuty
+                ) {
+                    Text(caption)
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.secondaryText)
+                        .accessibilityIdentifier("lighting-proposal-caption-\(card.id)")
+                }
             }
 
             durationRow
@@ -327,11 +349,15 @@ private struct LightingCardView: View {
                 .accessibilityIdentifier("lighting-transition-\(card.id)")
 
                 Button {
+                    holdTapped += 1
                     Task { await hold() }
                 } label: {
                     if submitting { ProgressView() } else { Text("Hold") }
                 }
                 .buttonStyle(.borderedProminent)
+                // The tap itself is acknowledged (UX review B8); `.success` on
+                // the grant stays separate, below.
+                .sensoryFeedback(.selection, trigger: holdTapped)
                 .frame(minHeight: 44)
                 .frame(maxWidth: .infinity)
                 .disabled(submitting || durationS == nil || client == nil)
@@ -347,6 +373,13 @@ private struct LightingCardView: View {
         .padding(14)
         .background(Theme.surface, in: .rect(cornerRadius: 12))
         .accessibilityElement(children: .contain)
+        // A draft nobody committed is not state worth keeping across a tab
+        // switch: on return the slider sits at what the hub reports, so the
+        // card reads as a report again (UX review A4). Only here — never on a
+        // stream frame, which would move the thumb under a drag in progress.
+        .onDisappear {
+            if !submitting { proposedDuty = (card.reportedDuty ?? 0) * 100 }
+        }
         .sensoryFeedback(.success, trigger: successPulse)
         // A problem sticks around only until the operator changes something
         // — a stale rejection sitting under a fresh edit or a hold that has

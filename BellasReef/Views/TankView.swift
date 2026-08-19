@@ -48,7 +48,7 @@ struct TankView: View {
                 // In the stack rather than a safeAreaInset: an inset paints its
                 // own full-width background, and any colour that was not exactly
                 // the page background drew a seam across the screen.
-                StatusLine(monitor: monitor)
+                StatusLine(monitor: monitor, catalog: catalog)
                 AlertBannerStack(monitor: monitor, catalog: catalog)
 
                 if monitor.probes.isEmpty {
@@ -131,6 +131,9 @@ struct WaitingForSensors: View {
 /// The safety line. Teal / amber / red, and red only ever means safety.
 struct StatusLine: View {
     let monitor: TankMonitor
+    /// Where the coverage note comes from. Optional so a caller without a
+    /// catalog still gets the plain line.
+    var catalog: DeviceCatalog? = nil
 
     var body: some View {
         // A clock, for the same reason the hero has one. `tone` and
@@ -144,12 +147,28 @@ struct StatusLine: View {
         }
     }
 
+    /// "All clear" plus what it is standing on (UX review A1): if any reporting
+    /// probe has no band, the line says so. Only on the clear line — every
+    /// other state already names its problem.
+    private var text: String {
+        guard monitor.tone == .allClear, let catalog else { return monitor.statusLine }
+        let note = MonitoringCoverage.note(sensorIds: monitor.sensorIds) { id in
+            let device = catalog.device(id)
+            return device?.alertMin != nil && device?.alertMax != nil
+        }
+        return note.map { "\(monitor.statusLine) · \($0)" } ?? monitor.statusLine
+    }
+
     private var line: some View {
         HStack(spacing: 8) {
-            Circle()
-                .fill(monitor.tone.color)
-                .frame(width: 8, height: 8)
-            Text(monitor.statusLine)
+            // A symbol, not a Circle shape: `.symbolEffect` only animates SF
+            // Symbols. A state change is worth one beat of motion (UX review
+            // B8); steady states stay still.
+            Image(systemName: "circle.fill")
+                .font(.system(size: 8))
+                .foregroundStyle(monitor.tone.color)
+                .symbolEffect(.pulse, options: .nonRepeating, value: monitor.tone)
+            Text(text)
                 .font(Theme.caption)
                 .foregroundStyle(monitor.tone == .allClear ? Theme.secondaryText : monitor.tone.color)
             Spacer()
@@ -159,7 +178,7 @@ struct StatusLine: View {
         // a *different solid* is not much better when it spans the width — it
         // reads as a bar the screen does not have.
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Status: \(monitor.statusLine)")
+        .accessibilityLabel("Status: \(text)")
     }
 }
 
@@ -541,7 +560,10 @@ struct ActuatorSections: View {
     /// `equipmentRows` — grouping/ordering is that function's job, not
     /// duplicated here. This view only adds the operator-facing titles.
     private var sections: [(role: String, title: String, rows: [EquipmentRow])] {
-        equipmentRows(devices: catalog.devices, frames: monitor.channels, roles: monitor.roles)
+        equipmentRows(
+            devices: catalog.devices, frames: monitor.channels, roles: monitor.roles,
+            registryLoaded: catalog.state == .loaded
+        )
             .map { (role: $0.role, title: Self.title(for: $0.role), rows: $0.rows) }
     }
 

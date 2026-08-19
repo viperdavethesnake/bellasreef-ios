@@ -35,6 +35,12 @@ struct SystemView: View {
         @Bindable var preferences = preferences
 
         NavigationStack {
+            // An index, not an inventory (UX review C1/C2). Five concerns with
+            // five growth curves used to share one scroll — hub identity,
+            // paired devices, adopted devices, sixteen available channels per
+            // board, preferences — with destructive Unadopt interleaved among
+            // additive `+`. Now the identity stays here and everything that
+            // grows is one push away, in its own leaf.
             List {
                 Section("Hub") {
                     LabeledContent("Name") {
@@ -53,11 +59,31 @@ struct SystemView: View {
                     }
                 }
 
-                pairedDevices
-
-                hardware
-
                 Section {
+                    NavigationLink {
+                        devicesLeaf
+                    } label: {
+                        LabeledContent("Devices") { Text(devicesSummary) }
+                    }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("system-devices")
+
+                    NavigationLink {
+                        hardwareLeaf
+                    } label: {
+                        LabeledContent("Hardware") { Text(hardwareSummary) }
+                    }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("system-hardware")
+
+                    NavigationLink {
+                        accessLeaf
+                    } label: {
+                        LabeledContent("Access") { Text(accessSummary) }
+                    }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("system-access")
+
                     NavigationLink {
                         AuditLogView()
                     } label: {
@@ -66,63 +92,40 @@ struct SystemView: View {
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("audit-log")
                 } footer: {
-                    Text("The hub's append-only record of who did what — every pairing, "
-                         + "adoption and revocation it has recorded.")
+                    Text("Devices are what the engine commands; Hardware is what the hub "
+                         + "can offer; Access is who may talk to it. The audit log is the "
+                         + "hub's append-only record of who did what.")
                 }
 
                 Section {
+                    // One row, a menu — the three unit names as words, no
+                    // segmented control to clip "Fahrenheit" at large text.
                     Picker("Temperature", selection: $preferences.temperatureUnit) {
                         ForEach(TemperatureUnitPreference.allCases) { unit in
                             Text(unit.label).tag(unit)
                         }
                     }
-                    // Inline rather than a segmented control: three options with
-                    // words rather than glyphs, and it reflows instead of
-                    // truncating at accessibility text sizes (§7.5). A segmented
-                    // control clips "Fahrenheit" to "Fahre…" at XXL.
-                    .pickerStyle(.inline)
+                    .pickerStyle(.menu)
+                    .frame(minHeight: 44)
                 } header: {
                     Text("Units")
                 } footer: {
                     Text(automaticExplanation)
                 }
-
-                Section {
-                    // Standard iOS destructive styling, per design brief §2 as
-                    // amended: control-red is the platform's word for "this
-                    // deletes something", and is not the safety red that governs
-                    // status and data.
-                    Button("Sign out of this hub", role: .destructive) {
-                        confirmingUnpair = true
-                    }
-                    // §7.4: nothing destructive fires on a single tap, and the
-                    // row keeps a 44pt target.
-                    .frame(minHeight: 44)
-
-                    if let signOutProblem {
-                        Label(signOutProblem, systemImage: "exclamationmark.triangle.fill")
-                            .font(Theme.caption)
-                            .foregroundStyle(Theme.attention)
-                    }
-                } footer: {
-                    Text(!countKnown
-                         ? "The hub could not be asked which devices are paired. Until it "
-                           + "answers, treat this as the only one it still trusts."
-                         : isLastDevice
-                         ? "This is the only device the hub still trusts. Signing out "
-                           + "revokes it, and pairing again will need hub access."
-                         : "Revokes this device on the hub and forgets the credential "
-                           + "here. Another paired device can approve it again later.")
-                }
             }
             .scrollContentBackground(.hidden)
             .reefBackground()
             .navigationTitle("System")
+            // Inline titles blurred over content that scrolled under them (UX
+            // review B2). The soft edge effect is the system's answer.
+            .scrollEdgeEffectStyle(.soft, for: .top)
             .task { await loadEverything() }
             // The list is otherwise a snapshot from whenever this tab last
             // appeared, and the hub changes under it — another device pairs, a
             // client is revoked from the CLI — with nothing pushed to say so.
             .refreshable { await loadEverything() }
+            // Sheets stay on the root: they present over the whole stack, from
+            // whichever leaf asked. Dialogs live on the leaf that owns them.
             .sheet(isPresented: $addingDevice) {
                 AddDeviceView(onApproved: { Task { await loadClients() } })
             }
@@ -131,87 +134,267 @@ struct SystemView: View {
                     Task { await loadHardware() }
                 }
             }
-            .confirmationDialog(
-                "Unadopt this device?",
-                isPresented: Binding(
-                    get: { unadopting != nil },
-                    set: { if !$0 { unadopting = nil } }
-                ),
-                titleVisibility: .visible,
-                presenting: unadopting
-            ) { device in
-                Button("Unadopt \(device.displayName ?? device.deviceId)",
-                       role: .destructive) {
-                    Task { await unadopt(device) }
+        }
+    }
+
+    // ------------------------------------------------------------ index rows
+
+    private var devicesSummary: String {
+        guard let hardwareDevices else { return hardwareFailed ? "—" : "…" }
+        let split = hardwareSections(hardwareDevices)
+        let detached = split.detached.isEmpty ? "" : " · \(split.detached.count) detached"
+        return "\(split.adopted.count) adopted\(detached)"
+    }
+
+    private var hardwareSummary: String {
+        guard let capabilities else { return hardwareFailed ? "—" : "…" }
+        let free = capabilities.filter { $0.boundTo == nil }.count
+        return free == 1 ? "1 channel available" : "\(free) channels available"
+    }
+
+    private var accessSummary: String {
+        guard let clients else { return clientsFailed ? "—" : "…" }
+        return clients.count == 1 ? "1 device paired" : "\(clients.count) devices paired"
+    }
+
+    // ---------------------------------------------------------------- leaves
+
+    /// Adopted devices, grouped by role, and the detached ones. Unadopt lives
+    /// here, a push away from the `+` rows it used to sit between.
+    private var devicesLeaf: some View {
+        List {
+            if let hardwareDevices {
+                let split = hardwareSections(hardwareDevices)
+                let byRole = Dictionary(grouping: split.adopted) { $0.role ?? "other" }
+                ForEach(byRole.keys.sorted(), id: \.self) { role in
+                    Section(role.capitalized) {
+                        ForEach(byRole[role] ?? [], id: \.deviceId) { device in
+                            adoptedRow(device)
+                        }
+                    }
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text("The engine stops commanding this channel and it returns to "
-                     + "its safe state. History is kept — adopting the same "
-                     + "hardware again reattaches it.")
+                if split.adopted.isEmpty && split.detached.isEmpty {
+                    Section {
+                        Text("Nothing adopted yet. Adopt a channel from Hardware.")
+                            .font(Theme.caption)
+                            .foregroundStyle(Theme.tertiaryText)
+                    }
+                }
+                if !split.detached.isEmpty {
+                    Section {
+                        ForEach(split.detached, id: \.deviceId) { device in
+                            detachedRow(device)
+                        }
+                    } header: {
+                        Text("Detached")
+                    } footer: {
+                        Text("Left in the registry by a previous owner or an unadopt. "
+                             + "Re-add to claim it again, or Clear to remove it for good.")
+                    }
+                }
+                if hardwareFailed {
+                    Text("Could not refresh this list — it may be out of date.")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.attention)
+                }
+            } else if hardwareFailed {
+                Text("Could not ask the hub which devices exist.")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.tertiaryText)
+            } else {
+                ProgressView().controlSize(.small)
             }
-            .confirmationDialog(
-                "Clear this device?",
-                isPresented: Binding(
-                    get: { forgetting != nil },
-                    set: { if !$0 { forgetting = nil } }
-                ),
-                titleVisibility: .visible,
-                presenting: forgetting
-            ) { device in
-                Button("Clear \(device.displayName ?? device.deviceId)",
-                       role: .destructive) {
-                    Task { await forget(device) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { _ in
-                Text("Its name and settings are deleted for good. Readings it "
-                     + "already recorded stay in history. If the hardware comes "
-                     + "back, adopting its channel starts a fresh device.")
+            if let unadoptProblem {
+                Label(unadoptProblem, systemImage: "exclamationmark.triangle.fill")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.attention)
             }
-            // Same treatment as sign-out: nothing destructive on a single tap,
-            // and the dialog names the device rather than saying "this one".
-            .confirmationDialog(
-                "Revoke this device?",
-                isPresented: Binding(
-                    get: { revoking != nil },
-                    set: { if !$0 { revoking = nil } }
-                ),
-                titleVisibility: .visible,
-                presenting: revoking
-            ) { client in
-                Button("Revoke \(client.name)", role: .destructive) {
-                    Task { await revoke(client) }
-                }
-                Button("Cancel", role: .cancel) {}
-            } message: { client in
-                Text("\(client.name) stops working immediately and cannot mint another "
-                     + "token. If it is a device you still have, it will need pairing "
-                     + "again from a device that is still trusted.")
+        }
+        .scrollContentBackground(.hidden)
+        .reefBackground()
+        .navigationTitle("Devices")
+        .refreshable { await loadHardware() }
+        .confirmationDialog(
+            "Unadopt this device?",
+            isPresented: Binding(
+                get: { unadopting != nil },
+                set: { if !$0 { unadopting = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: unadopting
+        ) { device in
+            Button("Unadopt \(device.displayName ?? device.deviceId)") {
+                Task { await unadopt(device) }
             }
-            .confirmationDialog(
-                isLastDevice ? "Sign out the last device?" : "Sign out of this hub?",
-                isPresented: $confirmingUnpair,
-                titleVisibility: .visible
-            ) {
-                Button("Sign out", role: .destructive) {
-                    Task { signOutProblem = await model.unpair() }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("The engine stops commanding this channel and it returns to "
+                 + "its safe state. Nothing is deleted: the name, thresholds "
+                 + "and history are kept, and adopting the same hardware "
+                 + "again reattaches them.")
+        }
+        .confirmationDialog(
+            "Clear this device?",
+            isPresented: Binding(
+                get: { forgetting != nil },
+                set: { if !$0 { forgetting = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: forgetting
+        ) { device in
+            Button("Clear \(device.displayName ?? device.deviceId)",
+                   role: .destructive) {
+                Task { await forget(device) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { _ in
+            Text("Its name and settings are deleted for good. Readings it "
+                 + "already recorded stay in history. If the hardware comes "
+                 + "back, adopting its channel starts a fresh device.")
+        }
+        // Same treatment as sign-out: nothing destructive on a single tap,
+    }
+
+    /// What the hub can offer, board by board (UX review C1/C2; ChannelGroups).
+    /// This is where per-chip state will live when it reaches the wire.
+    private var hardwareLeaf: some View {
+        List {
+            if let capabilities {
+                let free = capabilities.filter { $0.boundTo == nil }
+                if free.isEmpty {
+                    Section {
+                        Text(capabilities.isEmpty
+                             ? "The hub has not announced any hardware."
+                             : "Every announced channel is adopted.")
+                            .font(Theme.caption)
+                            .foregroundStyle(Theme.tertiaryText)
+                    }
                 }
-                Button("Cancel", role: .cancel) {}
-            } message: {
-                // Naming the exact command matters. The alternative — which is
-                // what shipped, and what locked David out — is telling somebody
-                // to wait for an approval that no device can give.
+                ForEach(ChannelGroups.group(free)) { group in
+                    Section {
+                        ForEach(group.channels) { capability in
+                            Button { adopting = capability } label: {
+                                availableRow(capability, detail: group.rowDetail(for: capability))
+                            }
+                            .accessibilityIdentifier("hardware-available-channel")
+                        }
+                    } header: {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(group.title)
+                            if !group.subtitle.isEmpty {
+                                Text(group.subtitle).textCase(nil)
+                            }
+                        }
+                    }
+                }
+                if hardwareFailed {
+                    Text("Could not refresh this list — it may be out of date.")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.attention)
+                }
+                // A footer row, not a `.safeAreaInset(edge: .bottom)`: that
+                // inset, under a TabView with tabBarMinimizeBehavior, put
+                // UIKit's navigation transition into a safe-area layout loop
+                // (100 % CPU, every later push/pop dead — 2026-08-18 22:04).
+                Section {
+                    EmptyView()
+                } footer: {
+                    Text("Adopting a channel makes it a device the engine may command. "
+                         + "Controls live on the tab that uses the device. Channels are "
+                         + "numbered from 1 here; boards print them from 0, so channel 1 "
+                         + "is a board's 0.")
+                }
+            } else if hardwareFailed {
+                Text("Could not ask the hub what hardware it has.")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.tertiaryText)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .reefBackground()
+        .navigationTitle("Hardware")
+        .refreshable { await loadHardware() }
+    }
+
+    /// Who may talk to the hub, and this device's own way out.
+    private var accessLeaf: some View {
+        List {
+            pairedDevices
+
+            Section {
+                // Standard iOS destructive styling, per design brief §2 as
+                // amended: control-red is the platform's word for "this
+                // deletes something", and is not the safety red that governs
+                // status and data.
+                Button("Sign out of this hub", role: .destructive) {
+                    confirmingUnpair = true
+                }
+                // §7.4: nothing destructive fires on a single tap, and the
+                // row keeps a 44pt target.
+                .frame(minHeight: 44)
+
+                if let signOutProblem {
+                    Label(signOutProblem, systemImage: "exclamationmark.triangle.fill")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.attention)
+                }
+            } footer: {
                 Text(!countKnown
-                     ? "The hub could not say whether another device is paired. If none "
-                       + "is, nothing can approve this one again, and getting back in "
-                       + "will need `bellasreef pair` on the hub."
+                     ? "The hub could not be asked which devices are paired. Until it "
+                       + "answers, treat this as the only one it still trusts."
                      : isLastDevice
-                     ? "No other device is paired, so nothing can approve this one "
-                       + "again. To get back in you will need to run `bellasreef pair` "
-                       + "on the hub."
-                     : "Another paired device can approve this one again later.")
+                     ? "This is the only device the hub still trusts. Signing out "
+                       + "revokes it, and pairing again will need hub access."
+                     : "Revokes this device on the hub and forgets the credential "
+                       + "here. Another paired device can approve it again later.")
             }
+        }
+        .scrollContentBackground(.hidden)
+        .reefBackground()
+        .navigationTitle("Access")
+        .refreshable { await loadClients() }
+        .confirmationDialog(
+            "Revoke this device?",
+            isPresented: Binding(
+                get: { revoking != nil },
+                set: { if !$0 { revoking = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: revoking
+        ) { client in
+            Button("Revoke \(client.name)", role: .destructive) {
+                Task { await revoke(client) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { client in
+            Text("\(client.name) stops working immediately and cannot mint another "
+                 + "token. If it is a device you still have, it will need pairing "
+                 + "again from a device that is still trusted.")
+        }
+        .confirmationDialog(
+            isLastDevice ? "Sign out the last device?" : "Sign out of this hub?",
+            isPresented: $confirmingUnpair,
+            titleVisibility: .visible
+        ) {
+            Button("Sign out", role: .destructive) {
+                Task { signOutProblem = await model.unpair() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            // Naming the exact command matters. The alternative — which is
+            // what shipped, and what locked David out — is telling somebody
+            // to wait for an approval that no device can give.
+            Text(!countKnown
+                 ? "The hub could not say whether another device is paired. If none "
+                   + "is, nothing can approve this one again, and getting back in "
+                   + "will need `bellasreef pair` on the hub."
+                 : isLastDevice
+                 ? "No other device is paired, so nothing can approve this one "
+                   + "again. To get back in you will need to run `bellasreef pair` "
+                   + "on the hub."
+                 : "Another paired device can approve this one again later.")
         }
     }
 
@@ -294,69 +477,6 @@ struct SystemView: View {
         return "last seen \(RelativeAge.describe(from: seen))"
     }
 
-    /// Inventory and lifecycle only — controls live on the function tabs
-    /// (design ruling 2026-08-13: System is never a junk drawer).
-    @ViewBuilder
-    private var hardware: some View {
-        Section {
-            if let hardwareDevices, let capabilities {
-                let split = hardwareSections(hardwareDevices)
-                ForEach(split.adopted, id: \.deviceId) { device in
-                    adoptedRow(device)
-                }
-                let free = capabilities.filter { $0.boundTo == nil }
-                if free.isEmpty && split.adopted.isEmpty && split.detached.isEmpty {
-                    Text("The hub has not announced any hardware.")
-                        .font(Theme.caption)
-                        .foregroundStyle(Theme.tertiaryText)
-                }
-                if !free.isEmpty {
-                    Text("Available channels")
-                        .font(Theme.caption)
-                        .foregroundStyle(Theme.tertiaryText)
-                    ForEach(free) { capability in
-                        Button { adopting = capability } label: {
-                            availableRow(capability)
-                        }
-                        .accessibilityIdentifier("hardware-available-channel")
-                    }
-                }
-                if !split.detached.isEmpty {
-                    Text("Detached")
-                        .font(Theme.caption)
-                        .foregroundStyle(Theme.tertiaryText)
-                    ForEach(split.detached, id: \.deviceId) { device in
-                        detachedRow(device)
-                    }
-                }
-                if hardwareFailed {
-                    Text("Could not refresh this list — it may be out of date.")
-                        .font(Theme.caption)
-                        .foregroundStyle(Theme.attention)
-                }
-            } else if hardwareFailed {
-                Text("Could not ask the hub what hardware it has.")
-                    .font(Theme.caption)
-                    .foregroundStyle(Theme.tertiaryText)
-            } else {
-                ProgressView().controlSize(.small)
-            }
-
-            if let unadoptProblem {
-                Label(unadoptProblem, systemImage: "exclamationmark.triangle.fill")
-                    .font(Theme.caption)
-                    .foregroundStyle(Theme.attention)
-            }
-        } header: {
-            Text("Hardware")
-        } footer: {
-            Text("Adopting a channel makes it a device the engine may command. "
-                 + "Controls live on the tab that uses the device; this list is "
-                 + "the inventory. Channels are numbered from 1 here; boards "
-                 + "print them from 0, so channel 1 is a board's 0.")
-        }
-    }
-
     @ViewBuilder
     private func adoptedRow(_ device: Components.Schemas.DeviceView) -> some View {
         HStack {
@@ -368,7 +488,10 @@ struct SystemView: View {
                     .foregroundStyle(Theme.tertiaryText)
             }
             Spacer()
-            Button("Unadopt", role: .destructive) { unadopting = device }
+            // Not `.destructive`: unadopt is a reversible soft flag — name,
+            // thresholds, bindings and history all survive, and the dialog says
+            // so. Red is reserved for the one hard delete (Clear). UX review A5.
+            Button("Unadopt") { unadopting = device }
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("unadopt-\(device.deviceId)")
         }
@@ -407,21 +530,20 @@ struct SystemView: View {
     /// as `ch 28-000000bfe244`. The number is 1-based for the reader and
     /// 0-based on the wire — see `ChannelLabel`.
     private func deviceSubtitle(_ device: Components.Schemas.DeviceView) -> String {
-        var parts = [device.driverId]
-        if let channel = device.channel {
-            parts.append(Int(channel) != nil ? "ch \(ChannelLabel.humanNumber(channel))" : channel)
-        }
-        if let role = device.role { parts.append(role) }
-        return parts.joined(separator: " · ")
+        DeviceSubtitle.text(driverId: device.driverId, channel: device.channel, role: device.role)
     }
 
     @ViewBuilder
-    private func availableRow(_ capability: Components.Schemas.CapabilityView) -> some View {
+    private func availableRow(
+        _ capability: Components.Schemas.CapabilityView, detail: String
+    ) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("\(capability.source.rawValue) · channel \(ChannelLabel.humanNumber(capability.channel))")
+                Text("Channel \(ChannelLabel.humanNumber(capability.channel))")
                     .foregroundStyle(Theme.primaryText)
-                Text(availableSubtitle(capability))
+                // The board's shared identity is in the section header; only
+                // what is particular to this channel is repeated here.
+                Text(detail.isEmpty ? "not adopted" : "\(detail) · not adopted")
                     .font(Theme.caption)
                     .foregroundStyle(Theme.tertiaryText)
             }
@@ -430,31 +552,6 @@ struct SystemView: View {
                 .foregroundStyle(Theme.accent)
         }
         .frame(minHeight: 44)
-    }
-
-    /// The operator's only physical-identity cue before adopting a channel
-    /// that will emit real output — e.g. an I2C address or a GPIO number.
-    /// `detail` is a free-form, hub-declared container (generated as
-    /// `OpenAPIRuntime.OpenAPIObjectContainer`, whose `.value` is
-    /// `[String: (any Sendable)?]` — verified against the runtime source,
-    /// not guessed). Only flat scalar values are shown; a nested array or
-    /// object is skipped rather than rendered as a debug dump. Sorted by key
-    /// so the same capability reads the same way on every refresh.
-    private func availableSubtitle(_ capability: Components.Schemas.CapabilityView) -> String {
-        let flat = capability.detail.additionalProperties.value
-            .compactMap { key, value -> (String, String)? in
-                switch value {
-                case let value as String: return (key, value)
-                case let value as Int: return (key, String(value))
-                case let value as Double: return (key, String(value))
-                case let value as Bool: return (key, String(value))
-                default: return nil
-                }
-            }
-            .sorted { $0.0 < $1.0 }
-            .map { "\($0.0) \($0.1)" }
-            .joined(separator: " · ")
-        return flat.isEmpty ? "announced, not adopted" : "\(flat) · announced, not adopted"
     }
 
     /// True when this is the only client the hub still trusts — or when the

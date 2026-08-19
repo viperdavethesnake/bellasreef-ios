@@ -24,6 +24,10 @@ struct AuditLogView: View {
     }
 
     @State private var load: Load = .loading
+    /// Paired-client id → name, so an actor reads as "iPhone A252" rather
+    /// than its UUID (UX review A8). Best effort: an unreachable list leaves
+    /// the short id, never blocks the log.
+    @State private var clientNames: [String: String] = [:]
     /// `nil` reads as "All" — the toolbar menu's default, and the one choice
     /// that needs no match against a fetched category.
     @State private var selectedCategory: String?
@@ -95,11 +99,19 @@ struct AuditLogView: View {
                 .padding(.vertical, 3)
                 .background(Capsule().fill(Theme.surfaceRaised))
             VStack(alignment: .leading, spacing: 2) {
+                // Which device, who, when — in that order (UX review A8). The
+                // device comes from device_id or the payload's target; the
+                // actor is a client's name when it is a client; the time is a
+                // clock time with the age beside it.
+                let payload = event.event.additionalProperties.value
+                let subject = AuditRow.subjectId(deviceId: event.deviceId, payload: payload)
                 Text(AuditPhrase.title(
                     action: event.action,
-                    deviceName: event.deviceId.map { model.catalog?.name(for: $0) ?? $0 }))
+                    deviceName: subject.map { model.catalog?.name(for: $0) ?? $0 },
+                    reason: payload["reason"] as? String))
                     .foregroundStyle(Theme.primaryText)
-                Text("\(event.actor) · \(RelativeAge.describe(from: event.occurredAt))")
+                Text("\(AuditRow.actorName(event.actor, clients: clientNames)) · "
+                     + AuditRow.when(event.occurredAt))
                     .font(Theme.caption)
                     .foregroundStyle(Theme.tertiaryText)
             }
@@ -158,6 +170,11 @@ struct AuditLogView: View {
             load = .loaded(events)
         } catch {
             load = .failed("\(error)")
+        }
+        // Names for actors, after the log itself: a failure here costs
+        // names, not the record.
+        if let clients = try? await client.clients() {
+            clientNames = Dictionary(uniqueKeysWithValues: clients.map { ($0.id, $0.name) })
         }
     }
 }

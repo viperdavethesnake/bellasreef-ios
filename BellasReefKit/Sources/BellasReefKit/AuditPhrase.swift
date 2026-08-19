@@ -16,7 +16,11 @@
 /// generic string, so a future backend event ships legible on day one with
 /// no client change required.
 public enum AuditPhrase {
-    public static func title(action: String?, deviceName: String?) -> String {
+    /// `reason` is what the backend put on `override.released` since the E1
+    /// fix (2026-08-18): `manual`, `superseded`, `expired`, `lapsed`. Before
+    /// that every ending was "Manual override ended" and most endings were
+    /// never written at all (UX review A9).
+    public static func title(action: String?, deviceName: String?, reason: String? = nil) -> String {
         guard let action else { return "Event recorded" }
         let name = deviceName
         switch action {
@@ -38,8 +42,16 @@ public enum AuditPhrase {
         case "client.revoked":     return "Revoked a device's access"
         case "token.minted":       return "Signed in"
         case "token.rejected":     return "Rejected a sign-in"
-        case "override.created":   return "Manual override started"
-        case "override.released":  return "Manual override ended"
+        case "override.created":   return "Hold\(name.map { " on \($0)" } ?? "") started"
+        case "override.released":
+            let on = name.map { " on \($0)" } ?? ""
+            switch reason {
+            case "manual":     return "Hold\(on) released"
+            case "superseded": return "Hold\(on) ended — replaced by a new hold"
+            case "expired":    return "Hold\(on) ended — time ran out"
+            case "lapsed":     return "Hold\(on) ended — lapsed while the hub was down"
+            default:           return "Hold\(on) ended"
+            }
         default:                   return action
         }
     }

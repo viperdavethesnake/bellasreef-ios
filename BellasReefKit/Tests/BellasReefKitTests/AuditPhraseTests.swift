@@ -30,10 +30,12 @@ struct AuditPhraseTests {
                 == "Signed in")
         #expect(AuditPhrase.title(action: "token.rejected", deviceName: nil)
                 == "Rejected a sign-in")
+        // Overrides read as holds, naming the device when known — the
+        // per-reason endings are in AuditRowTests (UX review A8/A9).
         #expect(AuditPhrase.title(action: "override.created", deviceName: nil)
-                == "Manual override started")
+                == "Hold started")
         #expect(AuditPhrase.title(action: "override.released", deviceName: nil)
-                == "Manual override ended")
+                == "Hold ended")
     }
 
     /// The four ways a pairing attempt can grant or use access. Each reads as

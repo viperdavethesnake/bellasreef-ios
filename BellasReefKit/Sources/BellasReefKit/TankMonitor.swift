@@ -129,12 +129,28 @@ public final class TankMonitor {
         self.stream = stream
     }
 
-    /// A reading older than this is not "live" any more.
+    /// The floor on how long a reading may go unrefreshed before it is not
+    /// "live" any more.
     ///
     /// The DS18B20 takes ~831 ms per conversion and is polled every few
     /// seconds, so a minute of silence means something is wrong rather than
-    /// merely slow.
+    /// merely slow. A probe with a slower declared cadence gets longer — see
+    /// :func:`stalenessThreshold(for:)`.
     public static let stalenessThreshold: TimeInterval = 60
+
+    /// A probe's declared poll cadence in seconds, or nil when unknown. Wired
+    /// by the app from the device catalog (`DeviceView.pollIntervalS`); a
+    /// closure rather than a catalog reference so the monitor stays a stream
+    /// consumer that knows nothing about REST.
+    public var cadenceOf: (String) -> Double? = { _ in nil }
+
+    /// Three missed polls, never less than the 60 s floor (UX review A3): a
+    /// probe polled every five minutes is not stale after one, and a probe
+    /// polled every five seconds is not news after three misses.
+    public func stalenessThreshold(for sensorId: String) -> TimeInterval {
+        guard let cadence = cadenceOf(sensorId), cadence > 0 else { return Self.stalenessThreshold }
+        return max(Self.stalenessThreshold, 3 * cadence)
+    }
 
     /// Sensor ids in a stable order, so rows do not reshuffle between frames.
     public var sensorIds: [String] { probes.keys.sorted() }
@@ -142,9 +158,9 @@ public final class TankMonitor {
     public func probe(_ sensorId: String) -> Probe { probes[sensorId] ?? .waiting }
     public func history(_ sensorId: String) -> [Double] { histories[sensorId] ?? [] }
 
-    public func isStale(_ sensorId: String) -> Bool {
+    public func isStale(_ sensorId: String, now: Date = Date()) -> Bool {
         guard let last = probes[sensorId]?.observedAt else { return false }
-        return Date().timeIntervalSince(last) > Self.stalenessThreshold
+        return now.timeIntervalSince(last) > stalenessThreshold(for: sensorId)
     }
 
     /// True when *every* reporting probe has gone quiet.
@@ -291,7 +307,8 @@ public final class TankMonitor {
         }
     }
 
-    private func apply(_ frame: StreamFrame) {
+    // Internal, not private: the staleness tests feed frames through it.
+    func apply(_ frame: StreamFrame) {
         lastFrameAt = Date()
         switch frame {
         case .ready:
@@ -301,7 +318,16 @@ public final class TankMonitor {
             apply(sensor.payload)
         case let .state(state):
             connection = .live
-            channels[state.payload.actuatorId] = state
+            // Never regress. The hub replays each actuator's last known state
+            // on connect and then joins the live fan-out; a change that lands
+            // in between arrives *after* its own replayed predecessor. Keep
+            // the newer by `emitted_at` — a stale frame must not overwrite a
+            // fresh one (H3, 2026-08-18).
+            let id = state.payload.actuatorId
+            if let held = channels[id], held.payload.emittedAt > state.payload.emittedAt {
+                return
+            }
+            channels[id] = state
         case let .alert(alert):
             connection = .live
             apply(alert.payload)
