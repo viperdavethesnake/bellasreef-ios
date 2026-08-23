@@ -169,7 +169,7 @@ struct AuditLogView: View {
                 .sorted { $0.occurredAt > $1.occurredAt }
             load = .loaded(events)
         } catch {
-            load = .failed("\(error)")
+            load = .failed(HumanError.describe(error))
         }
         // Names for actors, after the log itself: a failure here costs
         // names, not the record.

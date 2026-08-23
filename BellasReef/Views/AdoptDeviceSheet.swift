@@ -211,7 +211,7 @@ struct AdoptDeviceSheet: View {
                 problem = "Not connected to the hub."
             }
         } catch {
-            problem = "\(error)"
+            problem = HumanError.describe(error)
         }
     }
 }

@@ -111,6 +111,8 @@ struct ScheduleEditorView: View {
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 64)
+                            .accessibilityLabel("Brightness percent")
+                            .accessibilityIdentifier("schedule-point-duty")
                         Text("%")
                             .font(Theme.caption)
                             .foregroundStyle(Theme.secondaryText)

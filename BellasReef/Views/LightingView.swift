@@ -340,7 +340,7 @@ private struct LightingCardView: View {
                 if let hold = currentHold(now: context.date) {
                     HStack(alignment: .center) {
                         Label(
-                            "Held at \(Int(hold.duty * 100))% · \(Self.label(for: hold.transition)) · "
+                            "Held at \(Dimming.percent(hold.duty))% · \(Self.label(for: hold.transition)) · "
                                 + "\(formatRemaining(secondsRemaining(hold, now: context.date)))"
                                 + returnsToText(hold),
                             systemImage: "hand.raised.fill"
@@ -508,7 +508,7 @@ private struct LightingCardView: View {
                 .font(Theme.caption)
                 .foregroundStyle(Theme.secondaryText)
             if let duty = card.reportedDuty {
-                Text("\(Int(duty * 100))%")
+                Text("\(Dimming.percent(duty))%")
                     .font(Theme.value)
                     .foregroundStyle(Theme.secondaryText)
             } else {
@@ -526,10 +526,10 @@ private struct LightingCardView: View {
     /// rather than three separately-focused elements.
     private var truthAccessibilityLabel: String {
         var parts = [card.name]
-        parts.append(card.reportedDuty.map { "\(Int($0 * 100)) percent" } ?? "no state yet")
+        parts.append(card.reportedDuty.map { "\(Dimming.percent($0)) percent" } ?? "no state yet")
         if let hold = currentHold() {
             parts.append(
-                "held at \(Int(hold.duty * 100)) percent, \(Self.label(for: hold.transition).lowercased()) transition"
+                "held at \(Dimming.percent(hold.duty)) percent, \(Self.label(for: hold.transition).lowercased()) transition"
             )
         }
         return parts.joined(separator: ", ")

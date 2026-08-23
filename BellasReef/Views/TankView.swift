@@ -673,7 +673,7 @@ struct ChannelRow: View {
             HStack {
                 Text(name).foregroundStyle(Theme.primaryText)
                 Spacer()
-                Text("\(Int(duty * 100))%")
+                Text("\(Dimming.percent(duty))%")
                     .font(Theme.value)
                     .foregroundStyle(Theme.secondaryText)
             }
@@ -693,7 +693,7 @@ struct ChannelRow: View {
 
             if let override = frame.override {
                 Label(
-                    "Held at \(Int(override.duty * 100))% · \(formatRemaining(override.expiresInS))",
+                    "Held at \(Dimming.percent(override.duty))% · \(formatRemaining(override.expiresInS))",
                     systemImage: "hand.raised.fill"
                 )
                 .font(Theme.caption)
@@ -713,9 +713,9 @@ struct ChannelRow: View {
     private static func spoken(
         name: String, duty: Double, frame: Components.Schemas.StateFrame
     ) -> String {
-        var parts = ["\(name), \(Int(duty * 100)) percent"]
+        var parts = ["\(name), \(Dimming.percent(duty)) percent"]
         if let override = frame.override {
-            parts.append("held at \(Int(override.duty * 100)) percent")
+            parts.append("held at \(Dimming.percent(override.duty)) percent")
         }
         if frame.payload.latched == true { parts.append("interlock latched") }
         return parts.joined(separator: ", ")

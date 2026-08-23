@@ -77,7 +77,7 @@ public final class DeviceCatalog {
             state = .loaded
         } catch {
             log.error("could not load devices: \(String(describing: error))")
-            state = .failed("\(error)")
+            state = .failed(HumanError.describe(error))
         }
     }
 
