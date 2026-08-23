@@ -61,4 +61,21 @@ struct DimmingTests {
         #expect(Dimming.convergenceCaption(reportedDuty: nil, targetDuty: 0.5) == nil)
         #expect(Dimming.convergenceCaption(reportedDuty: 0.5, targetDuty: nil) == nil)
     }
+
+    /// The threshold is a strict `>`, not `>=` — a gap of exactly the
+    /// threshold reads as arrived, not still catching up. 0.0/0.01 is chosen
+    /// (rather than e.g. 0.79/0.80) because it is one of the few pairs whose
+    /// `Double` subtraction lands on exactly 0.01 rather than a value a hair
+    /// above it — the point being tested is the `>` itself, not a rounding
+    /// artifact one way or the other.
+    @Test("convergence caption at exactly the threshold is nil, not shown")
+    func convergenceCaptionAtThreshold() {
+        #expect(Dimming.convergenceCaption(reportedDuty: 0.0, targetDuty: 0.01) == nil)
+    }
+
+    @Test("floor footnote is composed from the floor, exact string")
+    func floorFootnoteText() {
+        #expect(Dimming.floorFootnote ==
+                "Below 8% this dimmer is off — points under 8% run at 0%.")
+    }
 }

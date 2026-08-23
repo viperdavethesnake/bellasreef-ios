@@ -45,6 +45,17 @@ struct AuditRowTests {
         #expect(AuditRow.subjectId(deviceId: "row-wins", payload: ["device_id": "x"]) == "row-wins")
     }
 
+    /// The precedence itself — device_id ahead of target ahead of channel_id
+    /// — has no signal from single-key fixtures above, since none of them
+    /// sets two keys at once. This pins the actual ordering the 380482a
+    /// self-review fix put in place, so a future reorder fails a test
+    /// instead of shipping silently.
+    @Test("subjectId precedence: device_id beats target beats channel_id")
+    func subjectPrecedence() {
+        #expect(AuditRow.subjectId(deviceId: nil, payload: ["device_id": "d", "target": "t"]) == "d")
+        #expect(AuditRow.subjectId(deviceId: nil, payload: ["target": "t", "channel_id": "c"]) == "t")
+    }
+
     /// The three schedule-CRUD verbs carry no device/channel id at all — the
     /// hub puts the schedule's own name straight on the payload instead.
     /// subjectId stays id-only by design; this reads the name separately so
