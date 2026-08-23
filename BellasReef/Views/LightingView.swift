@@ -300,6 +300,14 @@ private struct LightingCardView: View {
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(truthAccessibilityLabel)
+            // `.combine` unions its children's traits into the merged
+            // element and forwards the sole actionable child's activation —
+            // here, the `NavigationLink`'s. Declared explicitly rather than
+            // left implicit: a reviewer (or a future edit) reading this file
+            // should not have to trust undocumented-at-a-glance combine
+            // behavior to know the row still announces and activates as a
+            // button for VoiceOver.
+            .accessibilityAddTraits(.isButton)
 
             if let schedule = card.schedule {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
