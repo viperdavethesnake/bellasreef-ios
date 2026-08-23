@@ -91,6 +91,11 @@ struct LightingView: View {
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // By id, not by card value: the destination re-resolves the card
+        // live, so a frame arriving while the detail is up updates it.
+        .navigationDestination(for: String.self) { id in
+            LightDetailView(cardId: id)
+        }
         // Same pull-to-refresh contract as TankView: prove the socket is
         // real, then re-read the registry that doesn't push.
         .refreshable {
@@ -278,9 +283,18 @@ private struct LightingCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                Text(card.name)
-                    .font(Theme.sectionTitle)
-                    .foregroundStyle(Theme.primaryText)
+                NavigationLink(value: card.id) {
+                    HStack(spacing: 4) {
+                        Text(card.name)
+                            .font(Theme.sectionTitle)
+                            .foregroundStyle(Theme.primaryText)
+                        Image(systemName: "chevron.right")
+                            .font(Theme.caption)
+                            .foregroundStyle(Theme.tertiaryText)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("lighting-detail-\(card.id)")
                 Spacer()
                 truthLine
             }
