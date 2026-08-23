@@ -56,4 +56,77 @@ struct ChannelGroupsTests {
         #expect(g.subtitle == "chip pwmchip0")
         #expect(g.rowDetail(for: g.channels[1]) == "gpio 13")
     }
+
+    /// Hand-built ChipStateView rows — same idiom as `cap`: generated inits
+    /// take alphabetically ordered labels (announcedAt, facts, initialised,
+    /// initialisedAt, instance, source).
+    private func chip(
+        _ source: String, _ facts: [String: Components.Schemas.ChipStateView.FactsPayload.AdditionalPropertiesPayload],
+        initialised: Bool = true
+    ) -> Components.Schemas.ChipStateView {
+        .init(
+            announcedAt: Date(timeIntervalSince1970: 1_787_000_000),
+            facts: .init(additionalProperties: facts),
+            initialised: initialised,
+            initialisedAt: Date(timeIntervalSince1970: 1_787_000_000),
+            instance: "test-instance",
+            source: source
+        )
+    }
+
+    @Test("chip state attaches to its board's group by source")
+    func chipStateAttaches() {
+        let groups = ChannelGroups.group(
+            [cap(.pca9685, "0", ["address": "0x40"])],
+            chipStates: [chip("pca9685", ["channels": .init(value2: 16)])]
+        )
+        #expect(groups.count == 1)
+        #expect(groups[0].state != nil)
+    }
+
+    @Test("PCA9685 state line: initialised · frequency · INVRT · channels")
+    func pcaStateLine() {
+        let group = ChannelGroups.group(
+            [cap(.pca9685, "0", [:])],
+            chipStates: [chip("pca9685", [
+                "frequency_hz": .init(value3: 502.7),
+                "invrt": .init(value4: false),
+                "channels": .init(value2: 16),
+            ])]
+        )[0]
+        #expect(group.stateLine == "initialised · 502.7 Hz · INVRT off · 16 channels")
+    }
+
+    @Test("Pi PWM state line: frequency · polarity · channels, whole hertz without decimals")
+    func piPwmStateLine() {
+        let group = ChannelGroups.group(
+            [cap(.piPwm, "0", [:])],
+            chipStates: [chip("pi-pwm", [
+                "frequency_hz": .init(value3: 500.0),
+                "polarity": .init(value1: "normal"),
+                "channels": .init(value2: 4),
+            ])]
+        )[0]
+        #expect(group.stateLine == "500 Hz · normal · 4 channels")
+    }
+
+    @Test("1-Wire state line pluralises probes")
+    func w1StateLine() {
+        let one = ChannelGroups.group(
+            [cap(.w1Bus, "28-000000bfe244", [:])],
+            chipStates: [chip("w1-bus", ["probes": .init(value2: 1)])]
+        )[0]
+        #expect(one.stateLine == "1 probe")
+        let three = ChannelGroups.group(
+            [cap(.w1Bus, "28-000000bfe244", [:])],
+            chipStates: [chip("w1-bus", ["probes": .init(value2: 3)])]
+        )[0]
+        #expect(three.stateLine == "3 probes")
+    }
+
+    @Test("a board with no chip state says why, in the spec's words")
+    func noStateLine() {
+        let group = ChannelGroups.group([cap(.pca9685, "0", [:])])[0]
+        #expect(group.stateLine == "not initialised — no channel adopted")
+    }
 }
