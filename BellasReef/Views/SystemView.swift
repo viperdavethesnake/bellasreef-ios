@@ -26,6 +26,11 @@ struct SystemView: View {
     @State private var capabilities: [Components.Schemas.CapabilityView]?
     @State private var hardwareDevices: [Components.Schemas.DeviceView]?
     @State private var hardwareFailed = false
+    /// What each chip last reported about itself. Named to avoid shadowing
+    /// `loadEverything()`'s local `async let hardware`. `nil` means unknown
+    /// — never fetched successfully — distinct from a successful fetch that
+    /// came back empty; see `ChannelGroups.Group.stateLine`.
+    @State private var chipStates: [Components.Schemas.ChipStateView]?
     @State private var adopting: Components.Schemas.CapabilityView?
     @State private var unadopting: Components.Schemas.DeviceView?
     @State private var forgetting: Components.Schemas.DeviceView?
@@ -260,19 +265,22 @@ struct SystemView: View {
     private var hardwareLeaf: some View {
         List {
             if let capabilities {
-                let free = capabilities.filter { $0.boundTo == nil }
-                if free.isEmpty {
+                if capabilities.isEmpty {
                     Section {
-                        Text(capabilities.isEmpty
-                             ? "The hub has not announced any hardware."
-                             : "Every announced channel is adopted.")
+                        Text("The hub has not announced any hardware.")
                             .font(Theme.caption)
                             .foregroundStyle(Theme.tertiaryText)
                     }
                 }
-                ForEach(ChannelGroups.group(free)) { group in
+                ForEach(ChannelGroups.group(capabilities, chipStates: chipStates)) { group in
                     Section {
-                        ForEach(group.channels) { capability in
+                        let free = group.channels.filter { $0.boundTo == nil }
+                        if free.isEmpty {
+                            Text("Every channel on this board is adopted.")
+                                .font(Theme.caption)
+                                .foregroundStyle(Theme.tertiaryText)
+                        }
+                        ForEach(free) { capability in
                             Button { adopting = capability } label: {
                                 availableRow(capability, detail: group.rowDetail(for: capability))
                             }
@@ -283,6 +291,9 @@ struct SystemView: View {
                             Text(group.title)
                             if !group.subtitle.isEmpty {
                                 Text(group.subtitle).textCase(nil)
+                            }
+                            if let stateLine = group.stateLine {
+                                Text(stateLine).textCase(nil)
                             }
                         }
                     }
@@ -602,6 +613,17 @@ struct SystemView: View {
             hardwareFailed = false
         } catch {
             hardwareFailed = true
+        }
+        // Separate do/catch: chip state is a 4.2.0 surface; a hub that
+        // predates it should degrade to the old leaf, not to a failure row.
+        do {
+            chipStates = try await client.hardware()
+        } catch {
+            // Keep the previous value on failure — stale beats wiped, same
+            // as capabilities/hardwareDevices above (their assignment is
+            // inside the try, so a throw leaves them untouched too). Do not
+            // touch `hardwareFailed` here: a pre-4.2.0 hub's `hardware()`
+            // failure is expected, not a fetch problem for the rest of the leaf.
         }
     }
 

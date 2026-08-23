@@ -17,6 +17,16 @@ public enum ChannelGroups {
         public let channels: [Components.Schemas.CapabilityView]
         /// Detail keys whose value is the same on every channel in the group.
         public let shared: [(String, String)]
+        /// What this board's chip last said about itself, when anything on
+        /// it has been adopted — `initialise()` only runs at adoption, so an
+        /// untouched board legitimately has no row (spec 2026-08-19 §iOS).
+        /// `nil` is ambiguous on its own: it means either "asked, no row for
+        /// this board" or "never asked" — `chipStateKnown` disambiguates.
+        public let state: Components.Schemas.ChipStateView?
+        /// Whether chip state was actually fetched for this call to
+        /// `group(_:chipStates:)` — `false` when the caller passed no array
+        /// (a pre-4.2.0 hub, or a fetch that hasn't completed or has failed).
+        public let chipStateKnown: Bool
 
         public var id: String { source.rawValue }
 
@@ -44,9 +54,63 @@ public enum ChannelGroups {
                 .map { "\($0.0) \($0.1)" }
                 .joined(separator: " · ")
         }
+
+        /// The chip's own account, one line, in the spec's exact shapes:
+        /// `initialised · 502.7 Hz · INVRT off · 16 channels` (PCA9685),
+        /// `500 Hz · normal · 4 channels` (Pi PWM), `1 probe` (1-Wire).
+        /// Facts a chip did not report are skipped, not rendered as blanks.
+        ///
+        /// `nil` when chip state is unknown for this load — a pre-4.2.0 hub,
+        /// or a fetch that failed or hasn't completed yet. A definite claim
+        /// like "not initialised — no channel adopted" needs a successful
+        /// fetch behind it; without one, rendering nothing is honest and
+        /// rendering that copy would be a false claim about a board we never
+        /// actually asked.
+        public var stateLine: String? {
+            guard chipStateKnown else { return nil }
+            guard let state else { return "not initialised — no channel adopted" }
+            var parts: [String] = []
+            switch source {
+            case .pca9685:
+                parts.append(state.initialised ? "initialised" : "not initialised")
+                if let hz = fact(double: "frequency_hz") { parts.append(Self.hertz(hz)) }
+                if let invrt = fact(bool: "invrt") { parts.append(invrt ? "INVRT on" : "INVRT off") }
+                if let n = fact(int: "channels") { parts.append("\(n) channels") }
+            case .piPwm:
+                if let hz = fact(double: "frequency_hz") { parts.append(Self.hertz(hz)) }
+                if let polarity = fact(string: "polarity") { parts.append(polarity) }
+                if let n = fact(int: "channels") { parts.append("\(n) channels") }
+            case .w1Bus:
+                if let n = fact(int: "probes") { parts.append(n == 1 ? "1 probe" : "\(n) probes") }
+            }
+            return parts.joined(separator: " · ")
+        }
+
+        /// 500.0 reads "500 Hz"; 502.7 reads "502.7 Hz" — a decimal is shown
+        /// only when it carries information.
+        private static func hertz(_ hz: Double) -> String {
+            hz == hz.rounded() ? "\(Int(hz)) Hz" : String(format: "%.1f Hz", hz)
+        }
+
+        private func fact(string key: String) -> String? {
+            state?.facts.additionalProperties[key]?.value1
+        }
+        private func fact(int key: String) -> Int? {
+            state?.facts.additionalProperties[key]?.value2
+        }
+        private func fact(double key: String) -> Double? {
+            guard let value = state?.facts.additionalProperties[key] else { return nil }
+            return value.value3 ?? value.value2.map(Double.init)
+        }
+        private func fact(bool key: String) -> Bool? {
+            state?.facts.additionalProperties[key]?.value4
+        }
     }
 
-    public static func group(_ channels: [Components.Schemas.CapabilityView]) -> [Group] {
+    public static func group(
+        _ channels: [Components.Schemas.CapabilityView],
+        chipStates: [Components.Schemas.ChipStateView]? = nil
+    ) -> [Group] {
         let bySource = Dictionary(grouping: channels, by: \.source)
         // Stable board order: on-board first, then the I²C board, then the
         // 1-Wire bus — the order the hub's own hardware is wired in.
@@ -64,7 +128,11 @@ public enum ChannelGroups {
                 .filter { key, value in details.allSatisfy { $0[key] == value } }
                 .sorted { $0.key < $1.key }
                 .map { ($0.key, $0.value) }
-            return Group(source: source, channels: sorted, shared: shared)
+            return Group(
+                source: source, channels: sorted, shared: shared,
+                state: chipStates?.first { $0.source == source.rawValue },
+                chipStateKnown: chipStates != nil
+            )
         }
     }
 
