@@ -168,6 +168,48 @@ struct LightingCardsTests {
         #expect(cards.map(\.id) == ["light-a", "light-b"])
     }
 
+    // MARK: - Schedules
+
+    private func scheduleView(
+        name: String, assignedTo channels: [String], zone: String = "UTC",
+        points: [Components.Schemas.SchedulePoint] = [
+            .init(at: "08:00:00", duty: 0.0), .init(at: "20:00:00", duty: 0.6),
+        ]
+    ) -> Components.Schemas.ScheduleView {
+        .init(
+            anchor: .clock, assignedChannels: channels,
+            id: "id-\(name)", name: name, points: points, zone: zone
+        )
+    }
+
+    @Test("a card carries the schedule assigned to its channel")
+    func scheduleAttaches() {
+        let cards = lightingCards(
+            devices: [LightingFixtures.device(id: "pi-pwm-0")],
+            frames: [:],
+            schedules: [scheduleView(name: "Reef day", assignedTo: ["pi-pwm-0"])]
+        )
+        #expect(cards[0].schedule?.name == "Reef day")
+        #expect(cards[0].schedule?.curve.points.count == 2)
+    }
+
+    @Test("no assignment, no schedule — and an unparseable one renders as absent, not as a guess")
+    func scheduleAbsentOrUnreadable() {
+        let unassigned = lightingCards(
+            devices: [LightingFixtures.device(id: "pi-pwm-0")],
+            frames: [:],
+            schedules: [scheduleView(name: "Reef day", assignedTo: ["pi-pwm-1"])]
+        )
+        #expect(unassigned[0].schedule == nil)
+
+        let badZone = lightingCards(
+            devices: [LightingFixtures.device(id: "pi-pwm-0")],
+            frames: [:],
+            schedules: [scheduleView(name: "Reef day", assignedTo: ["pi-pwm-0"], zone: "Neptune/Trench")]
+        )
+        #expect(badZone[0].schedule == nil)
+    }
+
     // MARK: allowedDurations
 
     @Test("a 1-hour cap excludes the presets above it")

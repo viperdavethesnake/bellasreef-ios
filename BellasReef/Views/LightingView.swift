@@ -20,8 +20,8 @@ struct LightingView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let monitor = model.monitor, let catalog = model.catalog {
-                    content(monitor: monitor, catalog: catalog)
+                if let monitor = model.monitor, let catalog = model.catalog, let library = model.library {
+                    content(monitor: monitor, catalog: catalog, library: library)
                 } else {
                     ContentUnavailableView(
                         "Not connected",
@@ -35,16 +35,26 @@ struct LightingView: View {
             // Inline titles blurred over content that scrolled under them (UX
             // review B2). The soft edge effect is the system's answer.
             .scrollEdgeEffectStyle(.soft, for: .top)
+            .toolbar {
+                NavigationLink {
+                    SchedulesView()
+                } label: {
+                    Label("Schedules", systemImage: "calendar.badge.clock")
+                }
+                .accessibilityIdentifier("lighting-schedules")
+            }
         }
     }
 
     @ViewBuilder
-    private func content(monitor: TankMonitor, catalog: DeviceCatalog) -> some View {
+    private func content(monitor: TankMonitor, catalog: DeviceCatalog, library: ScheduleLibrary) -> some View {
         // Pure merge, same as `ActuatorSections` does for the Tank tab's
         // Equipment rows — the registry (what's adopted) and the stream
         // (what has actually reported) disagree by design, and `lightingCards`
         // is what reconciles them for this screen's filter (`role == "light"`).
-        let cards = lightingCards(devices: catalog.devices, frames: monitor.channels)
+        let cards = lightingCards(
+            devices: catalog.devices, frames: monitor.channels, schedules: library.schedules
+        )
 
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
@@ -81,18 +91,33 @@ struct LightingView: View {
             .padding(.bottom, 32)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
+        // By id, not by card value: the destination re-resolves the card
+        // live, so a frame arriving while the detail is up updates it.
+        .navigationDestination(for: String.self) { id in
+            LightDetailView(cardId: id)
+        }
         // Same pull-to-refresh contract as TankView: prove the socket is
         // real, then re-read the registry that doesn't push.
         .refreshable {
             await monitor.reconnect()
             await catalog.refresh()
+            await library.refresh()
         }
-        .task { await catalog.refresh() }
+        .task {
+            await catalog.refresh()
+            await library.refresh()
+        }
         // The registry doesn't push — an adoption made on the System tab
         // while Lighting was backgrounded must not still read as "no lights"
-        // on return.
+        // on return. The same is true of a schedule assignment made on the
+        // Schedules tab.
         .onChange(of: scenePhase) { _, phase in
-            if phase == .active { Task { await catalog.refresh() } }
+            if phase == .active {
+                Task {
+                    await catalog.refresh()
+                    await library.refresh()
+                }
+            }
         }
     }
 
@@ -258,14 +283,51 @@ private struct LightingCardView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top) {
-                Text(card.name)
-                    .font(Theme.sectionTitle)
-                    .foregroundStyle(Theme.primaryText)
+                NavigationLink(value: card.id) {
+                    HStack(spacing: 4) {
+                        Text(card.name)
+                            .font(Theme.sectionTitle)
+                            .foregroundStyle(Theme.primaryText)
+                        Image(systemName: "chevron.right")
+                            .font(Theme.caption)
+                            .foregroundStyle(Theme.tertiaryText)
+                    }
+                }
+                .buttonStyle(.plain)
+                .accessibilityIdentifier("lighting-detail-\(card.id)")
                 Spacer()
                 truthLine
             }
             .accessibilityElement(children: .combine)
             .accessibilityLabel(truthAccessibilityLabel)
+            // `.combine` unions its children's traits into the merged
+            // element and forwards the sole actionable child's activation —
+            // here, the `NavigationLink`'s. Declared explicitly rather than
+            // left implicit: a reviewer (or a future edit) reading this file
+            // should not have to trust undocumented-at-a-glance combine
+            // behavior to know the row still announces and activates as a
+            // button for VoiceOver.
+            .accessibilityAddTraits(.isButton)
+
+            if let schedule = card.schedule {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    MiniDayCurve(
+                        curve: schedule.curve,
+                        nowSeconds: schedule.curve.secondsOfDay(for: context.date),
+                        nowDuty: card.reportedDuty
+                    )
+                }
+                Text(schedule.name)
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.secondaryText)
+            } else {
+                // Absence is a state, not a blank: with nothing assigned the
+                // engine rests this channel dark (composition law — resting
+                // is the schedule's value, else SAFE_DUTY).
+                Text("No schedule — resting is off.")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.tertiaryText)
+            }
 
             // The TimelineView wraps the *presence* decision, not just the
             // countdown text (review round 2, 2026-08-15 — C1): an
@@ -279,7 +341,8 @@ private struct LightingCardView: View {
                     HStack(alignment: .center) {
                         Label(
                             "Held at \(Int(hold.duty * 100))% · \(Self.label(for: hold.transition)) · "
-                                + "\(formatRemaining(secondsRemaining(hold, now: context.date)))",
+                                + "\(formatRemaining(secondsRemaining(hold, now: context.date)))"
+                                + returnsToText(hold),
                             systemImage: "hand.raised.fill"
                         )
                         .font(Theme.caption)
@@ -424,6 +487,16 @@ private struct LightingCardView: View {
 
     private func secondsRemaining(_ hold: LightingCard.ActiveHold, now: Date) -> Double {
         max(0, hold.expiresAt.timeIntervalSince(now))
+    }
+
+    /// What release/expiry goes back to — computable now that resting has a
+    /// value (spec 2026-08-19: "returns to N %" from the curve at expiry).
+    /// Silent with no schedule: "returns to off" is already what the layout
+    /// says one line up, and repeating it in every hold row is noise.
+    private func returnsToText(_ hold: LightingCard.ActiveHold) -> String {
+        guard let schedule = card.schedule else { return "" }
+        let duty = schedule.curve.duty(at: hold.expiresAt)
+        return " · returns to \(Int((duty * 100).rounded()))%"
     }
 
     @ViewBuilder

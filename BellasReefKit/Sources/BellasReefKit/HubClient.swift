@@ -531,6 +531,141 @@ public actor HubClient {
         }
     }
 
+    // MARK: Schedules
+
+    /// The schedule library (`GET /api/v1/lighting/schedules`) — every
+    /// curve, with the channels each is assigned to.
+    public func schedules() async throws -> [Components.Schemas.ScheduleView] {
+        switch try await client.listSchedules() {
+        case let .ok(response): return try response.body.json
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the schedules query")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("schedules returned \(statusCode)")
+        }
+    }
+
+    /// Every documented ending of creating or replacing a schedule. One enum
+    /// for both verbs because the editor's Save is one gesture — which verb
+    /// ran is not something the operator should need different handling for.
+    public enum ScheduleSaveOutcome: Sendable {
+        /// 200 — the hub's copy, authoritative (times normalised, id set).
+        case saved(Components.Schemas.ScheduleView)
+        /// 409 — another schedule already has this name.
+        case nameTaken
+        /// 422 — the curve does not validate. Description-only on the wire,
+        /// so no hub sentence to relay; the editor pre-validates with the
+        /// same rules to make this near-unreachable.
+        case curveRejected
+        /// 404 — update only: the schedule was deleted under the editor.
+        case unknownSchedule
+    }
+
+    public func createSchedule(
+        _ request: Components.Schemas.ScheduleRequest
+    ) async throws -> ScheduleSaveOutcome {
+        switch try await client.createSchedule(body: .json(request)) {
+        case let .ok(response): return .saved(try response.body.json)
+        case .conflict: return .nameTaken
+        case .unprocessableContent: return .curveRejected
+        case .unauthorized: throw credentialWasRejected()
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("createSchedule returned \(statusCode)")
+        }
+    }
+
+    public func updateSchedule(
+        id: String, _ request: Components.Schemas.ScheduleRequest
+    ) async throws -> ScheduleSaveOutcome {
+        switch try await client.updateSchedule(
+            path: .init(scheduleId: id), body: .json(request)
+        ) {
+        case let .ok(response): return .saved(try response.body.json)
+        case .notFound: return .unknownSchedule
+        case .conflict: return .nameTaken
+        case .unprocessableContent: return .curveRejected
+        case .unauthorized: throw credentialWasRejected()
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("updateSchedule returned \(statusCode)")
+        }
+    }
+
+    /// Every documented ending of `DELETE /api/v1/lighting/schedules/{id}`.
+    public enum ScheduleDeleteOutcome: Sendable, Equatable {
+        case deleted
+        /// 409 — still assigned to a channel; unassign it first (the hub's
+        /// ON DELETE RESTRICT, the forgetDevice lesson pre-applied).
+        case stillAssigned
+        /// 404 — already gone.
+        case unknown
+    }
+
+    public func deleteSchedule(id: String) async throws -> ScheduleDeleteOutcome {
+        switch try await client.deleteSchedule(path: .init(scheduleId: id)) {
+        case .noContent: return .deleted
+        case .conflict: return .stillAssigned
+        case .notFound: return .unknown
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the schedule id")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("deleteSchedule returned \(statusCode)")
+        }
+    }
+
+    /// Every documented ending of pointing a channel at a schedule. Assign
+    /// replaces whatever was assigned — one schedule per channel is the
+    /// hub's data model, so there is no "already assigned" conflict case.
+    public enum AssignOutcome: Sendable {
+        /// 200 — echoes the schedule, `assignedChannels` freshly including
+        /// this channel.
+        case assigned(Components.Schemas.ScheduleView)
+        /// 409 — the channel is registered observe_only and accepts no
+        /// commands (same meaning as `HoldOutcome.notCommandable`).
+        case notCommandable
+        /// 404 — the schedule was deleted under the picker.
+        case unknownSchedule
+    }
+
+    public func assignSchedule(
+        channelId: String, scheduleId: String
+    ) async throws -> AssignOutcome {
+        switch try await client.assignSchedule(
+            path: .init(channelId: channelId),
+            body: .json(.init(scheduleId: scheduleId))
+        ) {
+        case let .ok(response): return .assigned(try response.body.json)
+        case .conflict: return .notCommandable
+        case .notFound: return .unknownSchedule
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the channel id")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("assignSchedule returned \(statusCode)")
+        }
+    }
+
+    /// Every documented ending of clearing a channel's schedule.
+    public enum UnassignOutcome: Sendable, Equatable {
+        case unassigned
+        /// 404 — nothing was assigned; already the state the operator asked
+        /// for, so callers treat it as success with different words.
+        case nothingAssigned
+    }
+
+    public func unassignSchedule(channelId: String) async throws -> UnassignOutcome {
+        switch try await client.unassignSchedule(path: .init(channelId: channelId)) {
+        case .ok: return .unassigned
+        case .notFound: return .nothingAssigned
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the channel id")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("unassignSchedule returned \(statusCode)")
+        }
+    }
+
     // MARK: History
 
     /// Downsampled history for the window, with alert episodes.
