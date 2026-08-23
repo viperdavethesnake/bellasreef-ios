@@ -254,8 +254,9 @@ struct SystemView: View {
             Button("Cancel", role: .cancel) {}
         } message: { _ in
             Text("Its name and settings are deleted for good. Readings it "
-                 + "already recorded stay in history. If the hardware comes "
-                 + "back, adopting its channel starts a fresh device.")
+                 + "already recorded stay in history. A schedule assigned to "
+                 + "this channel stays assigned — unassign it under Lighting "
+                 + "if the hardware is gone for good.")
         }
         // Same treatment as sign-out: nothing destructive on a single tap,
     }

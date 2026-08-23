@@ -15,6 +15,12 @@
 /// Unknown actions fall back to their own raw name rather than a blank or
 /// generic string, so a future backend event ships legible on day one with
 /// no client change required.
+///
+/// UX review SF7: the five `schedule.*` events fell through to that raw-name
+/// default (`"schedule.created"` on screen, not a sentence) because they
+/// shipped after this switch was last extended. `deviceName` here is the
+/// schedule's own name for the three CRUD verbs, and the assigned channel's
+/// display name for assign/unassign.
 public enum AuditPhrase {
     /// `reason` is what the backend put on `override.released` since the E1
     /// fix (2026-08-18): `manual`, `superseded`, `expired`, `lapsed`. Before
@@ -42,6 +48,11 @@ public enum AuditPhrase {
         case "client.revoked":     return "Revoked a device's access"
         case "token.minted":       return "Signed in"
         case "token.rejected":     return "Rejected a sign-in"
+        case "schedule.created":    return name.map { "Created schedule \($0)" } ?? "Created a schedule"
+        case "schedule.updated":    return name.map { "Edited schedule \($0)" } ?? "Edited a schedule"
+        case "schedule.deleted":    return name.map { "Deleted schedule \($0)" } ?? "Deleted a schedule"
+        case "schedule.assigned":   return "Schedule assigned\(name.map { " to \($0)" } ?? "")"
+        case "schedule.unassigned": return "Schedule unassigned\(name.map { " from \($0)" } ?? "")"
         case "override.created":   return "Hold\(name.map { " on \($0)" } ?? "") started"
         case "override.released":
             let on = name.map { " on \($0)" } ?? ""

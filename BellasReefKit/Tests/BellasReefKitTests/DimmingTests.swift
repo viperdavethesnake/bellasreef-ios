@@ -44,4 +44,38 @@ struct DimmingTests {
     func noReport() {
         #expect(Dimming.proposalCaption(proposedPercent: 30, reportedDuty: nil) == "not applied yet — tap Hold")
     }
+
+    @Test("percent rounds instead of truncating — 0.29 is 29, not 28")
+    func percentRounds() {
+        #expect(Dimming.percent(0.29) == 29)
+        #expect(Dimming.percent(0.005) == 1)
+        #expect(Dimming.percent(0.0) == 0)
+        #expect(Dimming.percent(1.0) == 100)
+    }
+
+    @Test("convergence caption appears only while meaningfully apart")
+    func convergenceCaption() {
+        #expect(Dimming.convergenceCaption(reportedDuty: 0.45, targetDuty: 0.79) ==
+                "Catching up to the schedule — now 45%, heading to 79%")
+        #expect(Dimming.convergenceCaption(reportedDuty: 0.79, targetDuty: 0.792) == nil)
+        #expect(Dimming.convergenceCaption(reportedDuty: nil, targetDuty: 0.5) == nil)
+        #expect(Dimming.convergenceCaption(reportedDuty: 0.5, targetDuty: nil) == nil)
+    }
+
+    /// The threshold is a strict `>`, not `>=` — a gap of exactly the
+    /// threshold reads as arrived, not still catching up. 0.0/0.01 is chosen
+    /// (rather than e.g. 0.79/0.80) because it is one of the few pairs whose
+    /// `Double` subtraction lands on exactly 0.01 rather than a value a hair
+    /// above it — the point being tested is the `>` itself, not a rounding
+    /// artifact one way or the other.
+    @Test("convergence caption at exactly the threshold is nil, not shown")
+    func convergenceCaptionAtThreshold() {
+        #expect(Dimming.convergenceCaption(reportedDuty: 0.0, targetDuty: 0.01) == nil)
+    }
+
+    @Test("floor footnote is composed from the floor, exact string")
+    func floorFootnoteText() {
+        #expect(Dimming.floorFootnote ==
+                "Below 8% this dimmer is off — points under 8% run at 0%.")
+    }
 }

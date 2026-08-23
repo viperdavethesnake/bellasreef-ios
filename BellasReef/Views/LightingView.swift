@@ -174,12 +174,21 @@ private struct LightingCardView: View {
     let client: HubClient?
 
     /// Percent, 0...100 — the *proposed* value. Seeded once from the hub's
-    /// reported duty at first appearance and never re-synced from later
-    /// frames: the truth line (`card.reportedDuty`/`currentHold()`) is what
-    /// renders hub state, and this must stay visibly the operator's own
-    /// pending choice, not something the stream can silently overwrite out
-    /// from under a drag in progress.
+    /// reported duty at first appearance, and re-seeded from later frames
+    /// only until the operator touches the slider (`draftTouched`, below):
+    /// before that touch it is a convenience tracking the hub, not a
+    /// proposal, so a schedule moving underneath it must not leave the
+    /// caption nagging about a choice nobody made (UX review SF9). Once
+    /// touched, the truth line (`card.reportedDuty`/`currentHold()`) is what
+    /// renders hub state and this stays visibly the operator's own pending
+    /// choice, not something the stream can silently overwrite out from
+    /// under a drag in progress.
     @State private var proposedDuty: Double
+    /// Gates the re-seed above: false until the operator drags the slider,
+    /// reset back to false whenever the draft is abandoned (`.onDisappear`)
+    /// or committed (a successful hold) — both are moments a fresh seed from
+    /// the hub is correct again, not a stream overwrite in progress.
+    @State private var draftTouched = false
     @State private var durationChoice: DurationChoice
     @State private var customMinutesText: String
     /// The operator's snap-vs-ramp choice, remembered across cards and
@@ -257,7 +266,7 @@ private struct LightingCardView: View {
     init(card: LightingCard, client: HubClient?) {
         self.card = card
         self.client = client
-        _proposedDuty = State(initialValue: (card.reportedDuty ?? 0) * 100)
+        _proposedDuty = State(initialValue: ((card.reportedDuty ?? 0) * 100).rounded())
         let allowed = allowedDurations(maxRuntimeS: card.maxRuntimeS)
         _durationChoice = State(initialValue: allowed.first.map(DurationChoice.preset) ?? .custom)
         // Seeded valid rather than empty (review fold, 2026-08-15, mirroring
@@ -310,16 +319,34 @@ private struct LightingCardView: View {
             .accessibilityAddTraits(.isButton)
 
             if let schedule = card.schedule {
+                // The caption reuses this TimelineView's own `context.date`
+                // rather than a fresh `Date()` (SF3) — the mini curve above
+                // already ticks every 30s, so the target duty it compares
+                // against and the dot it draws never disagree about "now".
                 TimelineView(.periodic(from: .now, by: 30)) { context in
-                    MiniDayCurve(
-                        curve: schedule.curve,
-                        nowSeconds: schedule.curve.secondsOfDay(for: context.date),
-                        nowDuty: card.reportedDuty
-                    )
+                    VStack(alignment: .leading, spacing: 4) {
+                        MiniDayCurve(
+                            curve: schedule.curve,
+                            nowSeconds: schedule.curve.secondsOfDay(for: context.date),
+                            nowDuty: card.reportedDuty
+                        )
+                        Text(schedule.name)
+                            .font(Theme.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                        // Only when no hold is active (spec SF3) — a hold's
+                        // duty is a deliberate override, not the engine
+                        // "catching up," so the caption would be misleading
+                        // while one is live.
+                        if currentHold(now: context.date) == nil, let caption = Dimming.convergenceCaption(
+                            reportedDuty: card.reportedDuty,
+                            targetDuty: schedule.curve.duty(at: context.date)
+                        ) {
+                            Text(caption)
+                                .font(Theme.caption)
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                    }
                 }
-                Text(schedule.name)
-                    .font(Theme.caption)
-                    .foregroundStyle(Theme.secondaryText)
             } else {
                 // Absence is a state, not a blank: with nothing assigned the
                 // engine rests this channel dark (composition law — resting
@@ -340,7 +367,7 @@ private struct LightingCardView: View {
                 if let hold = currentHold(now: context.date) {
                     HStack(alignment: .center) {
                         Label(
-                            "Held at \(Int(hold.duty * 100))% · \(Self.label(for: hold.transition)) · "
+                            "Held at \(Dimming.percent(hold.duty))% · \(Self.label(for: hold.transition)) · "
                                 + "\(formatRemaining(secondsRemaining(hold, now: context.date)))"
                                 + returnsToText(hold),
                             systemImage: "hand.raised.fill"
@@ -377,6 +404,7 @@ private struct LightingCardView: View {
                 // it (UX review A6). The value the operator sees is the value
                 // the pin gets.
                 Slider(value: $proposedDuty, in: 0...100, step: 1) { editing in
+                    if editing { draftTouched = true }
                     if !editing { proposedDuty = Dimming.snapPercent(proposedDuty) }
                 }
                     .disabled(submitting)
@@ -438,10 +466,23 @@ private struct LightingCardView: View {
         .accessibilityElement(children: .contain)
         // A draft nobody committed is not state worth keeping across a tab
         // switch: on return the slider sits at what the hub reports, so the
-        // card reads as a report again (UX review A4). Only here — never on a
-        // stream frame, which would move the thumb under a drag in progress.
+        // card reads as a report again (UX review A4). Resetting
+        // `draftTouched` here is what lets the `onChange` below keep tracking
+        // the hub on the next appearance, same as a fresh card would.
         .onDisappear {
-            if !submitting { proposedDuty = (card.reportedDuty ?? 0) * 100 }
+            if !submitting {
+                proposedDuty = ((card.reportedDuty ?? 0) * 100).rounded()
+                draftTouched = false
+            }
+        }
+        // The seed is a convenience, not a proposal: until the operator
+        // touches the slider, it tracks the hub so the caption cannot nag
+        // about a choice nobody made (UX review 2026-08-23, SF9 — the
+        // schedule moved and the app said "Set to 82% · not applied yet").
+        .onChange(of: card.reportedDuty) {
+            if !draftTouched && !submitting {
+                proposedDuty = ((card.reportedDuty ?? 0) * 100).rounded()
+            }
         }
         .sensoryFeedback(.success, trigger: successPulse)
         // A problem sticks around only until the operator changes something
@@ -508,7 +549,7 @@ private struct LightingCardView: View {
                 .font(Theme.caption)
                 .foregroundStyle(Theme.secondaryText)
             if let duty = card.reportedDuty {
-                Text("\(Int(duty * 100))%")
+                Text("\(Dimming.percent(duty))%")
                     .font(Theme.value)
                     .foregroundStyle(Theme.secondaryText)
             } else {
@@ -526,10 +567,10 @@ private struct LightingCardView: View {
     /// rather than three separately-focused elements.
     private var truthAccessibilityLabel: String {
         var parts = [card.name]
-        parts.append(card.reportedDuty.map { "\(Int($0 * 100)) percent" } ?? "no state yet")
+        parts.append(card.reportedDuty.map { "\(Dimming.percent($0)) percent" } ?? "no state yet")
         if let hold = currentHold() {
             parts.append(
-                "held at \(Int(hold.duty * 100)) percent, \(Self.label(for: hold.transition).lowercased()) transition"
+                "held at \(Dimming.percent(hold.duty)) percent, \(Self.label(for: hold.transition).lowercased()) transition"
             )
         }
         return parts.joined(separator: ", ")
@@ -635,6 +676,10 @@ private struct LightingCardView: View {
                 // correct deadline) is what actually shows.
                 releasedIDs = Set(card.hold.map { [$0.id] } ?? [])
                 successPulse += 1
+                // The hold committed the draft — the slider goes back to
+                // tracking the hub, same as an untouched card, rather than
+                // sitting frozen at what was just submitted (SF9).
+                draftTouched = false
             case .notCommandable:
                 problem = .message("This light is observe-only and can't be commanded from here.")
             case .clockUntrusted:

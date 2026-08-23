@@ -97,7 +97,7 @@ struct ScheduleEditorView: View {
                     .accessibilityIdentifier("schedule-name")
             }
 
-            Section("Points") {
+            Section {
                 ForEach($draft) { $point in
                     HStack {
                         DatePicker(
@@ -111,6 +111,8 @@ struct ScheduleEditorView: View {
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 64)
+                            .accessibilityLabel("Brightness percent")
+                            .accessibilityIdentifier("schedule-point-duty")
                         Text("%")
                             .font(Theme.caption)
                             .foregroundStyle(Theme.secondaryText)
@@ -124,6 +126,13 @@ struct ScheduleEditorView: View {
                 } label: {
                     Label("Add point", systemImage: "plus")
                 }
+            } header: {
+                Text("Points")
+            } footer: {
+                // Sub-8% points are legal on the wire and mean "off" — the
+                // hub's own snap_duty rule, not a client-side restriction —
+                // so this explains rather than blocks (UX review SF2).
+                Text(Dimming.floorFootnote)
             }
 
             if let assigned = schedule {
@@ -267,6 +276,40 @@ struct ScheduleEditorView: View {
                 .disabled(submitting)
             }
         }
+        // `schedule` is the immutable snapshot captured at init — a
+        // successful unassign below refreshes `model.library` but never
+        // that snapshot, so the ghost row would survive its own Unassign
+        // button until the editor is dismissed. Read the live copy instead,
+        // falling back to the snapshot only if the library hasn't loaded.
+        let liveAssigned = model.library?.schedules.first(where: { $0.id == schedule.id })?.assignedChannels
+            ?? schedule.assignedChannels
+        let ghosts = ScheduleGhosts.channels(
+            assigned: liveAssigned, devices: model.catalog?.devices ?? [],
+            devicesKnown: model.catalog?.state == .loaded
+        )
+        if !ghosts.isEmpty {
+            Section {
+                ForEach(ghosts, id: \.self) { channelId in
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(model.catalog?.name(for: channelId) ?? channelId)
+                                .foregroundStyle(Theme.primaryText)
+                            Text("Not adopted — output resumes if this channel is adopted again.")
+                                .font(Theme.caption)
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                        Spacer()
+                        Button("Unassign") {
+                            Task { await unassignGhost(channelId) }
+                        }
+                        .font(Theme.caption)
+                        .disabled(submitting)
+                    }
+                }
+            } header: {
+                Text("Still assigned")
+            }
+        }
     }
 
     private func toggle(
@@ -288,6 +331,23 @@ struct ScheduleEditorView: View {
                     problem = "This schedule was deleted on another device."
                 }
             }
+        } catch {
+            problem = HumanError.describe(error)
+        }
+    }
+
+    /// Unassigns a ghost channel — one the schedule still names in
+    /// `assignedChannels` that no adopted light currently claims. Mirrors
+    /// `toggle`'s error handling: `library.unassign` works on non-adopted
+    /// channels (backend verified), so this is the same call with no
+    /// `currentlyThis` branch to take.
+    private func unassignGhost(_ channelId: String) async {
+        guard let library = model.library else { return }
+        submitting = true
+        defer { submitting = false }
+        problem = nil
+        do {
+            _ = try await library.unassign(channelId: channelId)
         } catch {
             problem = HumanError.describe(error)
         }

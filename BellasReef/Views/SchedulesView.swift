@@ -102,6 +102,11 @@ struct SchedulesView: View {
             Button("Delete \(schedule.name)", role: .destructive) {
                 Task { await delete(schedule, library: library) }
             }
+            if !schedule.assignedChannels.isEmpty {
+                Button("Unassign from \(schedule.assignedChannels.count) light(s) and delete", role: .destructive) {
+                    Task { await unassignAllAndDelete(schedule, library: library) }
+                }
+            }
         } message: { schedule in
             Text(schedule.assignedChannels.isEmpty
                  ? "The curve is deleted for good."
@@ -110,14 +115,19 @@ struct SchedulesView: View {
     }
 
     private func row(_ schedule: Components.Schemas.ScheduleView) -> some View {
-        VStack(alignment: .leading, spacing: 2) {
+        let ghostCount = ScheduleGhosts.channels(
+            assigned: schedule.assignedChannels, devices: model.catalog?.devices ?? [],
+            devicesKnown: model.catalog?.state == .loaded
+        ).count
+        return VStack(alignment: .leading, spacing: 2) {
             Text(schedule.name)
                 .font(Theme.sectionTitle)
                 .foregroundStyle(Theme.primaryText)
             Text("\(schedule.points.count) points · "
                  + (schedule.assignedChannels.isEmpty
                     ? "not assigned"
-                    : "on \(schedule.assignedChannels.count) light(s)"))
+                    : "on \(schedule.assignedChannels.count) light(s)")
+                 + (ghostCount > 0 ? " · \(ghostCount) not adopted" : ""))
                 .font(Theme.caption)
                 .foregroundStyle(Theme.secondaryText)
         }
@@ -136,5 +146,26 @@ struct SchedulesView: View {
         } catch {
             problem = HumanError.describe(error)
         }
+    }
+
+    /// Unassigns every channel the schedule still names, then deletes it —
+    /// the destructive-confirm path for a schedule with ghosts, where the
+    /// plain delete above would only bounce off the hub's `stillAssigned`
+    /// refusal. Stops at the first failed unassign (`ScheduleLibrary.unassign`
+    /// throws rather than returning a failure case) so `delete` never fires
+    /// after a channel is left assigned; reports the same way `delete` does.
+    private func unassignAllAndDelete(
+        _ schedule: Components.Schemas.ScheduleView, library: ScheduleLibrary
+    ) async {
+        problem = nil
+        for channelId in schedule.assignedChannels {
+            do {
+                _ = try await library.unassign(channelId: channelId)
+            } catch {
+                problem = HumanError.describe(error)
+                return
+            }
+        }
+        await delete(schedule, library: library)
     }
 }
