@@ -267,8 +267,15 @@ struct ScheduleEditorView: View {
                 .disabled(submitting)
             }
         }
+        // `schedule` is the immutable snapshot captured at init — a
+        // successful unassign below refreshes `model.library` but never
+        // that snapshot, so the ghost row would survive its own Unassign
+        // button until the editor is dismissed. Read the live copy instead,
+        // falling back to the snapshot only if the library hasn't loaded.
+        let liveAssigned = model.library?.schedules.first(where: { $0.id == schedule.id })?.assignedChannels
+            ?? schedule.assignedChannels
         let ghosts = ScheduleGhosts.channels(
-            assigned: schedule.assignedChannels, devices: model.catalog?.devices ?? []
+            assigned: liveAssigned, devices: model.catalog?.devices ?? []
         )
         if !ghosts.isEmpty {
             Section {
