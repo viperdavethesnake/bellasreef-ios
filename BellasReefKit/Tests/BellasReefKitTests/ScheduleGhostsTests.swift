@@ -30,19 +30,32 @@ struct ScheduleGhostsTests {
     @Test("a channel assigned but not adopted is a ghost")
     func unadoptedChannelIsGhost() {
         let devices = [ScheduleGhostsFixtures.device(id: "pi-pwm-0", adopted: true)]
-        #expect(ScheduleGhosts.channels(assigned: ["pca9685-0", "pi-pwm-0"], devices: devices)
+        #expect(ScheduleGhosts.channels(assigned: ["pca9685-0", "pi-pwm-0"], devices: devices, devicesKnown: true)
                 == ["pca9685-0"])
     }
 
     @Test("no assignments means no ghosts")
     func emptyAssignedIsNoGhosts() {
         let devices = [ScheduleGhostsFixtures.device(id: "pi-pwm-0", adopted: true)]
-        #expect(ScheduleGhosts.channels(assigned: [], devices: devices) == [])
+        #expect(ScheduleGhosts.channels(assigned: [], devices: devices, devicesKnown: true) == [])
     }
 
     @Test("an unadopted device row present in devices still counts as a ghost")
     func unadoptedDeviceRowStillGhost() {
         let devices = [ScheduleGhostsFixtures.device(id: "pca9685-0", adopted: false)]
-        #expect(ScheduleGhosts.channels(assigned: ["pca9685-0"], devices: devices) == ["pca9685-0"])
+        #expect(ScheduleGhosts.channels(assigned: ["pca9685-0"], devices: devices, devicesKnown: true)
+                == ["pca9685-0"])
+    }
+
+    /// Final-review finding: an unloaded catalog must not read as "all
+    /// ghosts" — `devices` empty because it hasn't loaded yet looks
+    /// identical, on its own, to `devices` empty because nothing is
+    /// adopted. `devicesKnown: false` is what tells `channels` it's the
+    /// former, and the honest answer is "don't know", not a false positive
+    /// that invites unassigning a channel that may well be adopted.
+    @Test("an unknown catalog reports no ghosts, not all-ghosts")
+    func unknownCatalogIsNoGhosts() {
+        #expect(ScheduleGhosts.channels(assigned: ["pca9685-0", "pi-pwm-0"], devices: [], devicesKnown: false)
+                == [])
     }
 }

@@ -159,6 +159,17 @@ struct AdoptDeviceSheet: View {
                 }
             }
         }
+        // The ghost warning above reads `model.library?.schedules`, which is
+        // empty until something has fetched it — true on the likeliest path
+        // to this sheet (Tank → System → adopt), where Lighting/Schedules was
+        // never visited this launch. Without this the warning is silently
+        // inert exactly when it matters most (final-review finding). Same
+        // shape as `DeviceCatalog.refresh()`: it swallows its own errors, so
+        // there is nothing to catch here — a failed refresh just leaves the
+        // warning as it was.
+        .task {
+            await model.library?.refresh()
+        }
     }
 
     private var driverType: Components.Schemas.BindDeviceRequest.DriverTypePayload {

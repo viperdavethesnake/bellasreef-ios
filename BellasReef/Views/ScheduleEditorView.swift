@@ -284,7 +284,8 @@ struct ScheduleEditorView: View {
         let liveAssigned = model.library?.schedules.first(where: { $0.id == schedule.id })?.assignedChannels
             ?? schedule.assignedChannels
         let ghosts = ScheduleGhosts.channels(
-            assigned: liveAssigned, devices: model.catalog?.devices ?? []
+            assigned: liveAssigned, devices: model.catalog?.devices ?? [],
+            devicesKnown: model.catalog?.state == .loaded
         )
         if !ghosts.isEmpty {
             Section {

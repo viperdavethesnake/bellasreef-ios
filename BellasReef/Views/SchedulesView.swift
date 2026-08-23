@@ -116,7 +116,8 @@ struct SchedulesView: View {
 
     private func row(_ schedule: Components.Schemas.ScheduleView) -> some View {
         let ghostCount = ScheduleGhosts.channels(
-            assigned: schedule.assignedChannels, devices: model.catalog?.devices ?? []
+            assigned: schedule.assignedChannels, devices: model.catalog?.devices ?? [],
+            devicesKnown: model.catalog?.state == .loaded
         ).count
         return VStack(alignment: .leading, spacing: 2) {
             Text(schedule.name)

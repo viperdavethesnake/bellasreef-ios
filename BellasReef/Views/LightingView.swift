@@ -266,7 +266,7 @@ private struct LightingCardView: View {
     init(card: LightingCard, client: HubClient?) {
         self.card = card
         self.client = client
-        _proposedDuty = State(initialValue: (card.reportedDuty ?? 0) * 100)
+        _proposedDuty = State(initialValue: ((card.reportedDuty ?? 0) * 100).rounded())
         let allowed = allowedDurations(maxRuntimeS: card.maxRuntimeS)
         _durationChoice = State(initialValue: allowed.first.map(DurationChoice.preset) ?? .custom)
         // Seeded valid rather than empty (review fold, 2026-08-15, mirroring
@@ -333,7 +333,11 @@ private struct LightingCardView: View {
                         Text(schedule.name)
                             .font(Theme.caption)
                             .foregroundStyle(Theme.secondaryText)
-                        if let caption = Dimming.convergenceCaption(
+                        // Only when no hold is active (spec SF3) — a hold's
+                        // duty is a deliberate override, not the engine
+                        // "catching up," so the caption would be misleading
+                        // while one is live.
+                        if currentHold(now: context.date) == nil, let caption = Dimming.convergenceCaption(
                             reportedDuty: card.reportedDuty,
                             targetDuty: schedule.curve.duty(at: context.date)
                         ) {
@@ -467,7 +471,7 @@ private struct LightingCardView: View {
         // the hub on the next appearance, same as a fresh card would.
         .onDisappear {
             if !submitting {
-                proposedDuty = (card.reportedDuty ?? 0) * 100
+                proposedDuty = ((card.reportedDuty ?? 0) * 100).rounded()
                 draftTouched = false
             }
         }
@@ -477,7 +481,7 @@ private struct LightingCardView: View {
         // schedule moved and the app said "Set to 82% · not applied yet").
         .onChange(of: card.reportedDuty) {
             if !draftTouched && !submitting {
-                proposedDuty = (card.reportedDuty ?? 0) * 100
+                proposedDuty = ((card.reportedDuty ?? 0) * 100).rounded()
             }
         }
         .sensoryFeedback(.success, trigger: successPulse)

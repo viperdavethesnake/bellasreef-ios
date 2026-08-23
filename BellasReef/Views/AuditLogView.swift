@@ -100,9 +100,10 @@ struct AuditLogView: View {
                 .background(Capsule().fill(Theme.surfaceRaised))
             VStack(alignment: .leading, spacing: 2) {
                 // Which device, who, when — in that order (UX review A8). The
-                // device comes from device_id or the payload's target; the
-                // actor is a client's name when it is a client; the time is a
-                // clock time with the age beside it.
+                // device comes from device_id, the payload's target, or its
+                // channel_id (SF7), falling back to `subjectName` when none
+                // of those resolve; the actor is a client's name when it is
+                // a client; the time is a clock time with the age beside it.
                 let payload = event.event.additionalProperties.value
                 let subject = AuditRow.subjectId(deviceId: event.deviceId, payload: payload)
                 Text(AuditPhrase.title(
