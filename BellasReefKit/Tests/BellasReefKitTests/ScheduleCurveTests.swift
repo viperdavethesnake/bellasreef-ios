@@ -36,6 +36,11 @@ struct ScheduleCurveTests {
         #expect(curve.duty(at: utc(28_800)) == 0.2)
     }
 
+    @Test("duty(atSecondsToday:) agrees with duty(at:) for the same instant")
+    func atSecondsToday() {
+        #expect(curve.duty(atSecondsToday: 50_400) == curve.duty(at: utc(50_400)))
+    }
+
     @Test("the day segment interpolates linearly")
     func daySegment() {
         // 14:00 is halfway from 08:00 to 20:00.

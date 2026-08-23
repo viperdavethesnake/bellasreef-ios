@@ -85,6 +85,13 @@ public struct ScheduleCurve: Equatable, Hashable, Sendable {
         return plotted
     }
 
+    /// Duty at a bare seconds-of-day — for callers that already computed
+    /// "now" in the schedule's zone (the card computes it once and uses it
+    /// for both the dot's x and this label).
+    public func duty(atSecondsToday seconds: Int) -> Double {
+        duty(atSecondsOfDay: seconds)
+    }
+
     private func duty(atSecondsOfDay now: Int) -> Double {
         let first = points[0], last = points[points.count - 1]
         if now < first.seconds || now >= last.seconds {
