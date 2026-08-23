@@ -319,16 +319,30 @@ private struct LightingCardView: View {
             .accessibilityAddTraits(.isButton)
 
             if let schedule = card.schedule {
+                // The caption reuses this TimelineView's own `context.date`
+                // rather than a fresh `Date()` (SF3) — the mini curve above
+                // already ticks every 30s, so the target duty it compares
+                // against and the dot it draws never disagree about "now".
                 TimelineView(.periodic(from: .now, by: 30)) { context in
-                    MiniDayCurve(
-                        curve: schedule.curve,
-                        nowSeconds: schedule.curve.secondsOfDay(for: context.date),
-                        nowDuty: card.reportedDuty
-                    )
+                    VStack(alignment: .leading, spacing: 4) {
+                        MiniDayCurve(
+                            curve: schedule.curve,
+                            nowSeconds: schedule.curve.secondsOfDay(for: context.date),
+                            nowDuty: card.reportedDuty
+                        )
+                        Text(schedule.name)
+                            .font(Theme.caption)
+                            .foregroundStyle(Theme.secondaryText)
+                        if let caption = Dimming.convergenceCaption(
+                            reportedDuty: card.reportedDuty,
+                            targetDuty: schedule.curve.duty(at: context.date)
+                        ) {
+                            Text(caption)
+                                .font(Theme.caption)
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                    }
                 }
-                Text(schedule.name)
-                    .font(Theme.caption)
-                    .foregroundStyle(Theme.secondaryText)
             } else {
                 // Absence is a state, not a blank: with nothing assigned the
                 // engine rests this channel dark (composition law — resting

@@ -97,7 +97,7 @@ struct ScheduleEditorView: View {
                     .accessibilityIdentifier("schedule-name")
             }
 
-            Section("Points") {
+            Section {
                 ForEach($draft) { $point in
                     HStack {
                         DatePicker(
@@ -126,6 +126,13 @@ struct ScheduleEditorView: View {
                 } label: {
                     Label("Add point", systemImage: "plus")
                 }
+            } header: {
+                Text("Points")
+            } footer: {
+                // Sub-8% points are legal on the wire and mean "off" — the
+                // hub's own snap_duty rule, not a client-side restriction —
+                // so this explains rather than blocks (UX review SF2).
+                Text(Dimming.floorFootnote)
             }
 
             if let assigned = schedule {

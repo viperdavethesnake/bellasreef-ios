@@ -34,7 +34,10 @@ struct LightDetailView: View {
                     if let schedule = card.schedule {
                         TimelineView(.periodic(from: .now, by: 30)) { context in
                             VStack(alignment: .leading, spacing: 8) {
-                                ScheduleChart(curve: schedule.curve, nowDate: context.date)
+                                ScheduleChart(
+                                    curve: schedule.curve, nowDate: context.date,
+                                    reportedDuty: card.reportedDuty
+                                )
                                     .frame(height: 200)
                                 Text(schedule.name)
                                     .font(Theme.sectionTitle)
