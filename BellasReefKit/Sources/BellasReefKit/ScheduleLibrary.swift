@@ -8,9 +8,12 @@ import OSLog
 private let log = Logger(subsystem: "com.bellasreef.app", category: "schedules")
 
 /// The schedule library, hub-authoritative: every read renders the hub's
-/// copy, every successful mutation is followed by a re-read rather than a
-/// local patch — the hub normalises times and owns `assigned_channels`, and
-/// two clients can edit at once.
+/// copy, and a mutation is followed by a re-read — rather than a local
+/// patch — whenever the hub's answer implies our copy may be stale, not
+/// only on the verb's own literal success. The hub normalises times and
+/// owns `assigned_channels`, and two clients can edit at once, so a 404
+/// on delete or unassign is as informative as the 2xx: it means the other
+/// client already got there.
 ///
 /// Separate from `DeviceCatalog` for the same reason that is separate from
 /// `TankMonitor`: different clock. Schedules change when a person edits
@@ -42,7 +45,7 @@ public final class ScheduleLibrary {
             state = .loaded
         } catch {
             log.error("could not load schedules: \(String(describing: error))")
-            state = .failed("\(error)")
+            state = .failed(HumanError.describe(error))
         }
     }
 
@@ -68,9 +71,14 @@ public final class ScheduleLibrary {
         return outcome
     }
 
+    /// Refreshes on `.deleted` and also on `.unknown` (404) — a ghost row
+    /// the hub had already dropped should still vanish from our copy when
+    /// the operator confirms deletion, not just when the delete itself did
+    /// the dropping. The rule is refresh whenever the hub's answer implies
+    /// our copy may be stale, not only on the verb's own literal success.
     public func delete(id: String) async throws -> HubClient.ScheduleDeleteOutcome {
         let outcome = try await client.deleteSchedule(id: id)
-        if outcome == .deleted { await refresh() }
+        if outcome == .deleted || outcome == .unknown { await refresh() }
         return outcome
     }
 
@@ -82,9 +90,14 @@ public final class ScheduleLibrary {
         return outcome
     }
 
+    /// Refreshes on `.unassigned` and also on `.nothingAssigned` (404) — a
+    /// stuck checkmark from a divergence with another client self-heals
+    /// instead of surviving the operator's own unassign. The rule is
+    /// refresh whenever the hub's answer implies our copy may be stale, not
+    /// only on the verb's own literal success.
     public func unassign(channelId: String) async throws -> HubClient.UnassignOutcome {
         let outcome = try await client.unassignSchedule(channelId: channelId)
-        if outcome == .unassigned { await refresh() }
+        if outcome == .unassigned || outcome == .nothingAssigned { await refresh() }
         return outcome
     }
 }

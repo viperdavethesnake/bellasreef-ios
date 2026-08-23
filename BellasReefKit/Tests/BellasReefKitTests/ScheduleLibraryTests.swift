@@ -67,6 +67,38 @@ struct ScheduleLibraryTests {
         _ = try await library.delete(id: "6f1e4e2a-1111-4222-8333-444455556666")
         #expect(await calls.count == 1)
     }
+
+    @Test("delete: a 404 (already gone) re-reads too — a ghost row should vanish")
+    func deleteUnknownRefreshes() async throws {
+        let calls = CallCounter()
+        let library = ScheduleLibrary(client: stub { operation in
+            if operation == "listSchedules" {
+                await calls.bump()
+                return (200, json("[]"))
+            }
+            #expect(operation == "deleteSchedule")
+            return (404, nil)
+        })
+        let outcome = try await library.delete(id: "6f1e4e2a-1111-4222-8333-444455556666")
+        #expect(outcome == .unknown)
+        #expect(await calls.count == 1)
+    }
+
+    @Test("unassign: a 404 (nothing assigned) re-reads too — a stuck checkmark self-heals")
+    func unassignNothingRefreshes() async throws {
+        let calls = CallCounter()
+        let library = ScheduleLibrary(client: stub { operation in
+            if operation == "listSchedules" {
+                await calls.bump()
+                return (200, json("[]"))
+            }
+            #expect(operation == "unassignSchedule")
+            return (404, nil)
+        })
+        let outcome = try await library.unassign(channelId: "pi-pwm-0")
+        #expect(outcome == .nothingAssigned)
+        #expect(await calls.count == 1)
+    }
 }
 
 private actor CallCounter {
