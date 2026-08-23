@@ -48,6 +48,23 @@ public struct LightingCard: Equatable, Identifiable, Sendable {
         }
     }
 
+    /// The curve this channel is playing, when one is assigned — id and
+    /// name straight off the wire, the points parsed into `ScheduleCurve`.
+    /// `nil` covers both no-assignment and a schedule this client could not
+    /// parse (unknown zone, malformed time): absent renders honestly, a
+    /// guessed curve would not.
+    public struct AssignedSchedule: Equatable, Hashable, Sendable {
+        public let id: String
+        public let name: String
+        public let curve: ScheduleCurve
+
+        public init(id: String, name: String, curve: ScheduleCurve) {
+            self.id = id
+            self.name = name
+            self.curve = curve
+        }
+    }
+
     public let id: String
     public let name: String
     public let reportedDuty: Double?
@@ -57,15 +74,18 @@ public struct LightingCard: Equatable, Identifiable, Sendable {
     /// registration (device-classes.md §2), so this is defensive rather than
     /// an expected shape.
     public let maxRuntimeS: Double?
+    public let schedule: AssignedSchedule?
 
     public init(
-        id: String, name: String, reportedDuty: Double?, hold: ActiveHold?, maxRuntimeS: Double?
+        id: String, name: String, reportedDuty: Double?, hold: ActiveHold?, maxRuntimeS: Double?,
+        schedule: AssignedSchedule? = nil
     ) {
         self.id = id
         self.name = name
         self.reportedDuty = reportedDuty
         self.hold = hold
         self.maxRuntimeS = maxRuntimeS
+        self.schedule = schedule
     }
 }
 
@@ -83,12 +103,14 @@ public struct LightingCard: Equatable, Identifiable, Sendable {
 /// has already memorised the layout of.
 public func lightingCards(
     devices: [Components.Schemas.DeviceView],
-    frames: [String: Components.Schemas.StateFrame]
+    frames: [String: Components.Schemas.StateFrame],
+    schedules: [Components.Schemas.ScheduleView] = []
 ) -> [LightingCard] {
     devices
         .filter { $0.adopted == true && $0.role == "light" }
         .map { device in
             let frame = frames[device.deviceId]
+            let assigned = schedules.first { $0.assignedChannels.contains(device.deviceId) }
             return LightingCard(
                 id: device.deviceId,
                 name: device.displayName ?? device.deviceId,
@@ -99,7 +121,12 @@ public func lightingCards(
                         transition: HubClient.HoldTransition($0.transition)
                     )
                 },
-                maxRuntimeS: device.maxRuntimeS
+                maxRuntimeS: device.maxRuntimeS,
+                schedule: assigned.flatMap { schedule in
+                    ScheduleCurve(schedule).map {
+                        LightingCard.AssignedSchedule(id: schedule.id, name: schedule.name, curve: $0)
+                    }
+                }
             )
         }
         .sorted { $0.id < $1.id }
