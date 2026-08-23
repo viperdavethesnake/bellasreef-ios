@@ -37,4 +37,30 @@ public enum Dimming {
         }
         return "not applied yet — tap Hold"
     }
+
+    /// A duty (0…1) as the whole percent a person reads on a dial. Rounds,
+    /// never truncates — `Int(duty * 100)` on 0.29 reads 28 and printed a
+    /// number the hub never reported (UX review SF1).
+    public static func percent(_ duty: Double) -> Int {
+        Int((duty * 100).rounded())
+    }
+
+    /// Below this gap between reported and target duty, a slew in progress
+    /// reads as arrived rather than as still catching up.
+    public static let convergenceThreshold: Double = 0.01
+
+    /// The line under a schedule-driven duty while the engine's slew hasn't
+    /// caught up to the curve yet — nil once the two are close enough that
+    /// showing "catching up" would just be noise on top of a converged value.
+    public static func convergenceCaption(reportedDuty: Double?, targetDuty: Double?) -> String? {
+        guard let reportedDuty, let targetDuty,
+              abs(reportedDuty - targetDuty) > convergenceThreshold else { return nil }
+        return "Catching up to the schedule — now \(percent(reportedDuty))%, heading to \(percent(targetDuty))%"
+    }
+
+    /// The line explaining the floor itself, composed from `minUsableDuty`
+    /// so the 8 never appears as a literal a reader could mistake for a
+    /// magic number unconnected to the hub's own constant.
+    public static let floorFootnote: String =
+        "Below \(percent(minUsableDuty))% this dimmer is off — points under \(percent(minUsableDuty))% run at 0%."
 }

@@ -44,4 +44,21 @@ struct DimmingTests {
     func noReport() {
         #expect(Dimming.proposalCaption(proposedPercent: 30, reportedDuty: nil) == "not applied yet — tap Hold")
     }
+
+    @Test("percent rounds instead of truncating — 0.29 is 29, not 28")
+    func percentRounds() {
+        #expect(Dimming.percent(0.29) == 29)
+        #expect(Dimming.percent(0.005) == 1)
+        #expect(Dimming.percent(0.0) == 0)
+        #expect(Dimming.percent(1.0) == 100)
+    }
+
+    @Test("convergence caption appears only while meaningfully apart")
+    func convergenceCaption() {
+        #expect(Dimming.convergenceCaption(reportedDuty: 0.45, targetDuty: 0.79) ==
+                "Catching up to the schedule — now 45%, heading to 79%")
+        #expect(Dimming.convergenceCaption(reportedDuty: 0.79, targetDuty: 0.792) == nil)
+        #expect(Dimming.convergenceCaption(reportedDuty: nil, targetDuty: 0.5) == nil)
+        #expect(Dimming.convergenceCaption(reportedDuty: 0.5, targetDuty: nil) == nil)
+    }
 }
