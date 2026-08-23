@@ -248,6 +248,21 @@ public actor HubClient {
         }
     }
 
+    /// What each chip last reported about itself (`GET /api/v1/hardware`) —
+    /// the Hardware leaf's per-board second line. Register-level facts, not
+    /// capabilities: a capability is what channels a board offers, this is
+    /// what the chip's own registers said when hardware-io brought it up.
+    public func hardware() async throws -> [Components.Schemas.ChipStateView] {
+        switch try await client.listHardware() {
+        case let .ok(response): return try response.body.json
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the hardware query")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("hardware returned \(statusCode)")
+        }
+    }
+
     /// Every documented ending of `POST /api/v1/devices`. Distinct cases
     /// because each needs different words and a different way out — the 409
     /// in particular means the list on screen is stale, not that the operator
