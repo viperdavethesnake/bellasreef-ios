@@ -1,5 +1,6 @@
 // Bella's Reef iOS — closed source.
 
+import BellasReefAPI
 import Foundation
 import Testing
 
@@ -111,5 +112,63 @@ struct ScheduleCurveTests {
         #expect(ScheduleCurve(
             points: [.init(seconds: 0, duty: 0.5), .init(seconds: 100, duty: 0.6)],
             zoneIdentifier: "Neptune/Trench") == nil)
+    }
+
+    /// The only production entry point — the rest of the suite constructs
+    /// via `init?(points:zoneIdentifier:)`, which the API never calls.
+    @Test("the wire initializer round-trips through Components.Schemas.ScheduleView")
+    func wireInitializer() throws {
+        let schedule = Components.Schemas.ScheduleView(
+            anchor: .clock,
+            assignedChannels: [],
+            id: "11111111-1111-1111-1111-111111111111",
+            locale: nil,
+            name: "Test",
+            points: [
+                .init(at: "08:00:00", duty: 0.2),
+                .init(at: "20:00:00", duty: 0.8),
+            ],
+            zone: "UTC"
+        )
+        let curve = try #require(ScheduleCurve(schedule))
+        #expect(curve.duty(at: utc(28_800)) == 0.2)
+    }
+
+    @Test("the wire initializer refuses a malformed point time")
+    func wireInitializerMalformedTime() {
+        let schedule = Components.Schemas.ScheduleView(
+            anchor: .clock,
+            assignedChannels: [],
+            id: "11111111-1111-1111-1111-111111111111",
+            locale: nil,
+            name: "Test",
+            points: [
+                .init(at: "nonsense", duty: 0.2),
+                .init(at: "20:00:00", duty: 0.8),
+            ],
+            zone: "UTC"
+        )
+        #expect(ScheduleCurve(schedule) == nil)
+    }
+
+    /// Every other test's curve has exactly two points, so the bracketing
+    /// loop only ever sees one `(lo, hi)` pair. This one has four, so segment
+    /// SELECTION — not just interpolation — is exercised.
+    @Test("a multi-point curve selects the correct bracketing segment")
+    func multiSegmentSelection() {
+        let curve = ScheduleCurve(
+            points: [
+                .init(seconds: 0, duty: 0.0),
+                .init(seconds: 28_800, duty: 0.2),
+                .init(seconds: 50_400, duty: 1.0),
+                .init(seconds: 72_000, duty: 0.3),
+            ],
+            zoneIdentifier: "UTC"
+        )!
+        // 39,600 is halfway between the second and third points (28,800→50,400).
+        #expect(abs(curve.duty(at: utc(39_600)) - 0.6) < 1e-9)
+        // 61,200 is halfway between the third and fourth points (50,400→72,000) —
+        // a different segment again, proving selection isn't just "first match".
+        #expect(abs(curve.duty(at: utc(61_200)) - 0.65) < 1e-9)
     }
 }
