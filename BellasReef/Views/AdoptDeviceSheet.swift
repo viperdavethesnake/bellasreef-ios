@@ -32,6 +32,14 @@ struct AdoptDeviceSheet: View {
     /// mode worth the friction.
     private var isActuator: Bool { capability.source.rawValue != "w1-bus" }
 
+    /// An identifier, not a label: this stays 0-based like the wire, so a
+    /// pi-pwm channel 0 is still `pi-pwm-0` on the hub. Hoisted so the confirm
+    /// dialog can look up a ghost assignment before `adopt()` ever runs.
+    private var proposedDeviceId: String {
+        "\(driverType.rawValue)-\(capability.channel)"
+            .lowercased().replacingOccurrences(of: " ", with: "-")
+    }
+
     /// The hub 422s a sensor bind with no `poll_interval_s` — "a sensor must
     /// declare poll_interval_s" — so a sensor adopt needs a cadence from the
     /// operator. Actuators never poll and always send nil.
@@ -139,9 +147,16 @@ struct AdoptDeviceSheet: View {
                 // the dialog is gone before anything else touches the sheet.
                 Button("Cancel", role: .cancel) {}
             } message: {
-                Text("Adopting starts real output on this channel as soon as the "
-                     + "engine's schedule runs. Only adopt hardware you have "
-                     + "bench-verified.")
+                if let ghost = model.library?.schedule(assignedTo: proposedDeviceId) {
+                    Text("Adopting starts real output on this channel as soon as the "
+                         + "engine's schedule runs. “\(ghost.name)” is still assigned to "
+                         + "this channel and resumes immediately. Only adopt hardware "
+                         + "you have bench-verified.")
+                } else {
+                    Text("Adopting starts real output on this channel as soon as the "
+                         + "engine's schedule runs. Only adopt hardware you have "
+                         + "bench-verified.")
+                }
             }
         }
     }
@@ -165,10 +180,6 @@ struct AdoptDeviceSheet: View {
         defer { working = false }
         problem = nil
         do {
-            // An identifier, not a label: this stays 0-based like the wire,
-            // so a pi-pwm channel 0 is still `pi-pwm-0` on the hub.
-            let proposed = "\(driverType.rawValue)-\(capability.channel)"
-                .lowercased().replacingOccurrences(of: " ", with: "-")
             // BindDeviceRequest's memberwise init parameter order is
             // alphabetical (generated, verified against Types.swift):
             // channel, deviceId, displayName, driverType, location,
@@ -179,7 +190,7 @@ struct AdoptDeviceSheet: View {
             let outcome = try await model.client?.bind(
                 .init(
                     channel: capability.channel,
-                    deviceId: proposed,
+                    deviceId: proposedDeviceId,
                     displayName: name.trimmingCharacters(in: .whitespaces),
                     driverType: driverType,
                     pollIntervalS: isActuator ? nil : pollIntervalSeconds.map(Double.init),
