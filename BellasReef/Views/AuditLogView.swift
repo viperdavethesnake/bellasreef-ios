@@ -107,7 +107,7 @@ struct AuditLogView: View {
                 let subject = AuditRow.subjectId(deviceId: event.deviceId, payload: payload)
                 Text(AuditPhrase.title(
                     action: event.action,
-                    deviceName: subject.map { model.catalog?.name(for: $0) ?? $0 },
+                    deviceName: subject.map { model.catalog?.name(for: $0) ?? $0 } ?? AuditRow.subjectName(payload: payload),
                     reason: payload["reason"] as? String))
                     .foregroundStyle(Theme.primaryText)
                 Text("\(AuditRow.actorName(event.actor, clients: clientNames)) · "

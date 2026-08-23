@@ -35,6 +35,26 @@ struct AuditRowTests {
         #expect(AuditRow.subjectId(deviceId: nil, payload: [:]) == nil)
     }
 
+    /// UX review SF7: schedule.* events carry a device_id or channel_id key
+    /// this row never checked, so a schedule row's subject id resolved to
+    /// nothing even when the payload named one.
+    @Test("subjectId resolves device_id and channel_id payload keys")
+    func subjectKeys() {
+        #expect(AuditRow.subjectId(deviceId: nil, payload: ["device_id": "ds18b20-a"]) == "ds18b20-a")
+        #expect(AuditRow.subjectId(deviceId: nil, payload: ["channel_id": "pca9685-0"]) == "pca9685-0")
+        #expect(AuditRow.subjectId(deviceId: "row-wins", payload: ["device_id": "x"]) == "row-wins")
+    }
+
+    /// The three schedule-CRUD verbs carry no device/channel id at all — the
+    /// hub puts the schedule's own name straight on the payload instead.
+    /// subjectId stays id-only by design; this reads the name separately so
+    /// the catalog lookup (which is id-keyed) is never asked to resolve one.
+    @Test("subjectName reads the payload's name key")
+    func subjectName() {
+        #expect(AuditRow.subjectName(payload: ["name": "Reef Day"]) == "Reef Day")
+        #expect(AuditRow.subjectName(payload: [:]) == nil)
+    }
+
     @Test("an actor that is a paired client shows its name; services show as themselves")
     func actor() {
         let clients = ["ad981038-62ba-48e7-a2f8-b43fafc04f78": "iPhone A252"]

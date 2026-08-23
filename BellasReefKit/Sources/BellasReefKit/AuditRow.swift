@@ -12,11 +12,26 @@ public enum AuditRow {
     /// The device an event is about: the row's `device_id` when the writer
     /// set one, else the payload's `target` (override events name their
     /// target rather than an `actuator_id`, so the writer leaves `device_id`
-    /// null for them).
+    /// null for them), else the payload's `device_id`/`channel_id` (UX review
+    /// SF7: schedule.assigned/unassigned carry a `channel_id` this check
+    /// never looked for, so an assignment row's subject silently resolved to
+    /// nothing).
     public static func subjectId(deviceId: String?, payload: [String: (any Sendable)?]) -> String? {
         if let deviceId { return deviceId }
         if let target = payload["target"] as? String { return target }
+        if let payloadDeviceId = payload["device_id"] as? String { return payloadDeviceId }
+        if let channelId = payload["channel_id"] as? String { return channelId }
         return nil
+    }
+
+    /// The three schedule-CRUD verbs (`schedule.created/updated/deleted`)
+    /// carry no device or channel id at all — a schedule is not a device, so
+    /// there is nothing for `subjectId` to resolve — the hub puts the
+    /// schedule's own name straight on the payload instead. Kept separate
+    /// from `subjectId` rather than folded into it: ids feed the (id-keyed)
+    /// device catalog lookup, and a schedule name is never an id.
+    public static func subjectName(payload: [String: (any Sendable)?]) -> String? {
+        payload["name"] as? String
     }
 
     /// Who did it. A paired client's id becomes its name; the hub's own

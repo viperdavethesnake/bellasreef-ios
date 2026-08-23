@@ -90,4 +90,13 @@ struct AuditPhraseTests {
     func missingActionSaysRecorded() {
         #expect(AuditPhrase.title(action: nil, deviceName: nil) == "Event recorded")
     }
+
+    /// UX review SF7: schedule.* events fell through to their raw action
+    /// token (e.g. "schedule.created") instead of a sentence.
+    @Test("schedule verbs render as sentences, not raw tokens")
+    func scheduleVerbs() {
+        #expect(AuditPhrase.title(action: "schedule.created", deviceName: "Reef Day") == "Created schedule Reef Day")
+        #expect(AuditPhrase.title(action: "schedule.assigned", deviceName: "Meter Check") == "Schedule assigned to Meter Check")
+        #expect(AuditPhrase.title(action: "schedule.unassigned", deviceName: nil) == "Schedule unassigned")
+    }
 }
