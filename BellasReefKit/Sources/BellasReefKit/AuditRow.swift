@@ -10,16 +10,16 @@ import Foundation
 /// that order of importance.
 public enum AuditRow {
     /// The device an event is about: the row's `device_id` when the writer
-    /// set one, else the payload's `target` (override events name their
-    /// target rather than an `actuator_id`, so the writer leaves `device_id`
-    /// null for them), else the payload's `device_id`/`channel_id` (UX review
-    /// SF7: schedule.assigned/unassigned carry a `channel_id` this check
-    /// never looked for, so an assignment row's subject silently resolved to
-    /// nothing).
+    /// set one, else the payload's own `device_id`, else the payload's
+    /// `target` (override events name their target rather than an
+    /// `actuator_id`, so the writer leaves `device_id` null for them), else
+    /// the payload's `channel_id` (UX review SF7: schedule.assigned/
+    /// unassigned carry a `channel_id` this check never looked for, so an
+    /// assignment row's subject silently resolved to nothing).
     public static func subjectId(deviceId: String?, payload: [String: (any Sendable)?]) -> String? {
         if let deviceId { return deviceId }
-        if let target = payload["target"] as? String { return target }
         if let payloadDeviceId = payload["device_id"] as? String { return payloadDeviceId }
+        if let target = payload["target"] as? String { return target }
         if let channelId = payload["channel_id"] as? String { return channelId }
         return nil
     }
