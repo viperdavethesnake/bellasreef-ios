@@ -6,11 +6,11 @@ reviewable diff rather than something that shifts under the app.
 
 | | |
 |---|---|
-| Backend commit | `10690ba` |
-| CI run | [`32173078433`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/32173078433) (`client-contracts` artifact) |
-| Pinned on | 2026-08-18 |
-| OpenAPI | 3.1.0, 23 paths |
-| Contracts version | 4.0.0 |
+| Backend commit | `e70beac7` |
+| CI run | [`32563539855`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/32563539855) (`client-contracts` artifact) |
+| Pinned on | 2026-08-23 |
+| OpenAPI | 3.1.0, 27 paths |
+| Contracts version | 4.2.0 |
 | Frame schema | v1 |
 
 ## Refreshing
@@ -104,3 +104,22 @@ version number moved. `openapi.json` differs from 3.8.0 in `info.version`
 only; the generated client is byte-for-byte the same, no fixture moved, and
 the `/info` screen simply reads `contracts 4.0.0` off the hub. Pinned so the
 number the app shows is the number the hub serves.
+
+## What 4.0.0 → 4.2.0 added
+
+4.1.0 is the lighting schedule library (backend spec 2026-08-19, PR #60);
+4.2.0 is chip state on the wire (spec 2026-08-19, PRs #61/#62). Both minors
+are additive; no generated type changed shape, so no fixture broke — the work
+is new `HubClient` wrappers and new screens, not repair.
+
+| Symbol | Why it was missing from the app |
+|---|---|
+| `GET/POST /api/v1/lighting/schedules` (`listSchedules`/`createSchedule`) | the schedule library had no surface |
+| `GET/PUT/DELETE /api/v1/lighting/schedules/{id}` (`getSchedule`/`updateSchedule`/`deleteSchedule`) | edit/rename/delete of a curve |
+| `PUT/DELETE /api/v1/lighting/channels/{channel_id}/schedule` (`assignSchedule`/`unassignSchedule`) | a curve could not be pointed at a light |
+| `ScheduleView` / `ScheduleRequest` / `SchedulePoint` / `ScheduleAssignRequest` / `Locale` | the curve's wire shape (`points` are `{at: "HH:MM:SS", duty: 0–1}`; `Locale` is schema-now, consumed by solar v2) |
+| `GET /api/v1/hardware` (`listHardware`) | the Hardware leaf had no per-chip data source (option A ruling, 2026-08-18) |
+| `ChipStateView` | what a chip's own registers say — prescaler, measured oscillator, INVRT, initialised |
+
+`forgetDevice` changed description text only — same response codes, no
+call-site change.
