@@ -35,6 +35,14 @@ struct LightingView: View {
             // Inline titles blurred over content that scrolled under them (UX
             // review B2). The soft edge effect is the system's answer.
             .scrollEdgeEffectStyle(.soft, for: .top)
+            .toolbar {
+                NavigationLink {
+                    SchedulesView()
+                } label: {
+                    Label("Schedules", systemImage: "calendar.badge.clock")
+                }
+                .accessibilityIdentifier("lighting-schedules")
+            }
         }
     }
 
