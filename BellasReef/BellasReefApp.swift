@@ -60,6 +60,7 @@ final class AppModel {
     private(set) var client: HubClient?
     private(set) var monitor: TankMonitor?
     private(set) var catalog: DeviceCatalog?
+    private(set) var library: ScheduleLibrary?
     /// Why the app is back on the pairing screen, when it did not get there by
     /// the operator asking. Cleared once a new pairing lands.
     var notice: String?
@@ -101,6 +102,7 @@ final class AppModel {
         self.monitor = monitor
         let catalog = DeviceCatalog(client: client)
         self.catalog = catalog
+        self.library = ScheduleLibrary(client: client)
         // Staleness follows each probe's declared cadence (UX review A3); the
         // catalog is where the cadence lives, the monitor is what judges age.
         monitor.cadenceOf = { [weak catalog] id in catalog?.device(id)?.pollIntervalS }
@@ -154,6 +156,7 @@ final class AppModel {
         client = nil
         monitor = nil
         catalog = nil
+        library = nil
         phase = .choosingHub
         notice = "The hub no longer accepts this device — it was revoked, or the hub was "
             + "rebuilt. Pair again to get back in."
@@ -184,6 +187,7 @@ final class AppModel {
         client = nil
         monitor = nil
         catalog = nil
+        library = nil
         phase = .choosingHub
         notice = nil
         HubMemory.forget()
