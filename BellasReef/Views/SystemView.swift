@@ -27,8 +27,10 @@ struct SystemView: View {
     @State private var hardwareDevices: [Components.Schemas.DeviceView]?
     @State private var hardwareFailed = false
     /// What each chip last reported about itself. Named to avoid shadowing
-    /// `loadEverything()`'s local `async let hardware`.
-    @State private var chipStates: [Components.Schemas.ChipStateView] = []
+    /// `loadEverything()`'s local `async let hardware`. `nil` means unknown
+    /// — never fetched successfully — distinct from a successful fetch that
+    /// came back empty; see `ChannelGroups.Group.stateLine`.
+    @State private var chipStates: [Components.Schemas.ChipStateView]?
     @State private var adopting: Components.Schemas.CapabilityView?
     @State private var unadopting: Components.Schemas.DeviceView?
     @State private var forgetting: Components.Schemas.DeviceView?
@@ -290,7 +292,9 @@ struct SystemView: View {
                             if !group.subtitle.isEmpty {
                                 Text(group.subtitle).textCase(nil)
                             }
-                            Text(group.stateLine).textCase(nil)
+                            if let stateLine = group.stateLine {
+                                Text(stateLine).textCase(nil)
+                            }
                         }
                     }
                 }
@@ -615,7 +619,11 @@ struct SystemView: View {
         do {
             chipStates = try await client.hardware()
         } catch {
-            chipStates = []
+            // Keep the previous value on failure — stale beats wiped, same
+            // as capabilities/hardwareDevices above (their assignment is
+            // inside the try, so a throw leaves them untouched too). Do not
+            // touch `hardwareFailed` here: a pre-4.2.0 hub's `hardware()`
+            // failure is expected, not a fetch problem for the rest of the leaf.
         }
     }
 

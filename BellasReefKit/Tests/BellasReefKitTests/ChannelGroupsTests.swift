@@ -124,9 +124,15 @@ struct ChannelGroupsTests {
         #expect(three.stateLine == "3 probes")
     }
 
-    @Test("a board with no chip state says why, in the spec's words")
-    func noStateLine() {
+    @Test("chip state unknown (no chipStates argument) renders no second line")
+    func noStateLineUnknown() {
         let group = ChannelGroups.group([cap(.pca9685, "0", [:])])[0]
+        #expect(group.stateLine == nil)
+    }
+
+    @Test("chip state known-empty for this board says why, in the spec's words")
+    func noStateLineKnownEmpty() {
+        let group = ChannelGroups.group([cap(.pca9685, "0", [:])], chipStates: [])[0]
         #expect(group.stateLine == "not initialised — no channel adopted")
     }
 }

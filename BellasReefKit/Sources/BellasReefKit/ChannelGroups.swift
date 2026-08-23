@@ -20,7 +20,13 @@ public enum ChannelGroups {
         /// What this board's chip last said about itself, when anything on
         /// it has been adopted — `initialise()` only runs at adoption, so an
         /// untouched board legitimately has no row (spec 2026-08-19 §iOS).
+        /// `nil` is ambiguous on its own: it means either "asked, no row for
+        /// this board" or "never asked" — `chipStateKnown` disambiguates.
         public let state: Components.Schemas.ChipStateView?
+        /// Whether chip state was actually fetched for this call to
+        /// `group(_:chipStates:)` — `false` when the caller passed no array
+        /// (a pre-4.2.0 hub, or a fetch that hasn't completed or has failed).
+        public let chipStateKnown: Bool
 
         public var id: String { source.rawValue }
 
@@ -53,7 +59,15 @@ public enum ChannelGroups {
         /// `initialised · 502.7 Hz · INVRT off · 16 channels` (PCA9685),
         /// `500 Hz · normal · 4 channels` (Pi PWM), `1 probe` (1-Wire).
         /// Facts a chip did not report are skipped, not rendered as blanks.
-        public var stateLine: String {
+        ///
+        /// `nil` when chip state is unknown for this load — a pre-4.2.0 hub,
+        /// or a fetch that failed or hasn't completed yet. A definite claim
+        /// like "not initialised — no channel adopted" needs a successful
+        /// fetch behind it; without one, rendering nothing is honest and
+        /// rendering that copy would be a false claim about a board we never
+        /// actually asked.
+        public var stateLine: String? {
+            guard chipStateKnown else { return nil }
             guard let state else { return "not initialised — no channel adopted" }
             var parts: [String] = []
             switch source {
@@ -95,7 +109,7 @@ public enum ChannelGroups {
 
     public static func group(
         _ channels: [Components.Schemas.CapabilityView],
-        chipStates: [Components.Schemas.ChipStateView] = []
+        chipStates: [Components.Schemas.ChipStateView]? = nil
     ) -> [Group] {
         let bySource = Dictionary(grouping: channels, by: \.source)
         // Stable board order: on-board first, then the I²C board, then the
@@ -116,7 +130,8 @@ public enum ChannelGroups {
                 .map { ($0.key, $0.value) }
             return Group(
                 source: source, channels: sorted, shared: shared,
-                state: chipStates.first { $0.source == source.rawValue }
+                state: chipStates?.first { $0.source == source.rawValue },
+                chipStateKnown: chipStates != nil
             )
         }
     }
