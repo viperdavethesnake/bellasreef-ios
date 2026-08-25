@@ -60,10 +60,10 @@ struct LightingView: View {
             VStack(alignment: .leading, spacing: 16) {
                 // A control surface showing a last-known duty with no
                 // connection indication is dishonest (review, 2026-08-15) —
-                // the same `StatusLine` TankView leads with, unmodified: it
-                // is driven purely by `monitor.tone`/`monitor.statusLine`,
-                // nothing tab-specific.
-                StatusLine(monitor: monitor, catalog: catalog)
+                // but the sensor-aware line leaked "Waiting for a sensor"
+                // into a tab about lights (rehearsal F4). Connection-scoped:
+                // the socket's honesty and the interlock, nothing sensor.
+                StatusLine(monitor: monitor, scope: .connection)
 
                 if cards.isEmpty {
                     emptyState(catalog: catalog)

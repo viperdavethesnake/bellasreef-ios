@@ -151,6 +151,12 @@ public final class TankMonitor {
     /// consumer that knows nothing about REST.
     public var cadenceOf: (String) -> Double? = { _ in nil }
 
+    /// Adopted-sensor count from the registry, injected like `cadenceOf` so
+    /// the monitor stays a stream consumer that knows nothing about REST.
+    /// nil means the registry has not loaded — the probe-stream fallback
+    /// applies until it has (rehearsal 2026-08-24, F3).
+    public var adoptedSensorCount: () -> Int? = { nil }
+
     /// Three missed polls, never less than the 60 s floor (UX review A3): a
     /// probe polled every five minutes is not stale after one, and a probe
     /// polled every five seconds is not news after three misses.
@@ -192,10 +198,12 @@ public final class TankMonitor {
         if probes.values.contains(where: { if case .faulted = $0 { return true } else { return false } }) {
             return .attention
         }
-        // A connected hub with no probe reporting is not "all clear". The tank
-        // is unmonitored, and painting that teal says the opposite of what is
-        // true — the same failure as showing a stale number as current.
-        if probes.isEmpty { return .attention }
+        // A connected hub with no probe reporting is not "all clear" — unless
+        // no sensor is adopted at all. The first is an adopted probe going
+        // unheard (unmonitored, amber); the second is a configuration — a
+        // lighting-only hub must not sit amber forever (rehearsal F3). An
+        // unloaded registry (nil) keeps the old probe-stream rule.
+        if probes.isEmpty && adoptedSensorCount() != 0 { return .attention }
         switch connection {
         case .live where !everythingIsStale: return .allClear
         default: return .attention
@@ -215,8 +223,35 @@ public final class TankMonitor {
                 return faulted.count == 1 ? "Sensor fault" : "\(faulted.count) sensor faults"
             }
             if !alerts.isEmpty { return alerts.count == 1 ? "1 alert" : "\(alerts.count) alerts" }
-            if probes.isEmpty { return "Waiting for a sensor" }
+            if probes.isEmpty {
+                return adoptedSensorCount() == 0 ? "No sensors adopted" : "Waiting for a sensor"
+            }
             return everythingIsStale ? "No data for a minute" : "All clear"
+        case let .disconnected(why): return "Disconnected — \(why)"
+        case let .contractMismatch(detail): return "App and hub disagree — \(detail)"
+        }
+    }
+
+    /// Connection-scoped status for control surfaces (rehearsal F4). The
+    /// Lighting tab needs the socket's honesty and the interlock — "Sensor
+    /// fault" there describes a different screen's problem. Sensor states
+    /// stay in `tone`/`statusLine`, which remain the Tank tab's pair.
+    public var connectionTone: HealthTone {
+        if channels.values.contains(where: { $0.payload.latched == true }) { return .safety }
+        switch connection {
+        case .live: return .allClear
+        default: return .attention
+        }
+    }
+
+    public var connectionLine: String {
+        if channels.values.contains(where: { $0.payload.latched == true }) {
+            return "Interlock latched"
+        }
+        switch connection {
+        case .idle: return "Not connected"
+        case .connecting: return "Connecting…"
+        case .live: return "Connected"
         case let .disconnected(why): return "Disconnected — \(why)"
         case let .contractMismatch(detail): return "App and hub disagree — \(detail)"
         }
