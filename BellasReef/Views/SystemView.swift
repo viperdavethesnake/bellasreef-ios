@@ -41,6 +41,10 @@ struct SystemView: View {
     /// F6). Sensors still re-add directly; a probe read has no failure mode
     /// worth the friction, same rule as `AdoptDeviceSheet.isActuator`.
     @State private var readding: Components.Schemas.DeviceView?
+    /// The device whose name is being edited, and the draft. An alert with a
+    /// text field, not a sheet: one field, one decision.
+    @State private var renaming: Components.Schemas.DeviceView?
+    @State private var renameText = ""
     @State private var unadoptProblem: String?
 
     var body: some View {
@@ -294,6 +298,22 @@ struct SystemView: View {
                      + "have bench-verified.")
             }
         }
+        .alert(
+            "Rename",
+            isPresented: Binding(
+                get: { renaming != nil },
+                set: { if !$0 { renaming = nil } }
+            ),
+            presenting: renaming
+        ) { device in
+            TextField("Name", text: $renameText)
+                .accessibilityIdentifier("rename-name-field")
+            Button("Save") { Task { await rename(device) } }
+            Button("Cancel", role: .cancel) {}
+        } message: { device in
+            Text("Shown everywhere this device appears. Leave empty to go "
+                 + "back to \(device.deviceId).")
+        }
         // The ghost lookup above reads `model.library?.schedules`, which is
         // empty until something has fetched it — and the likeliest path here
         // (Tank → System → Devices) never visits Lighting. Same shape and
@@ -544,6 +564,17 @@ struct SystemView: View {
                     .foregroundStyle(Theme.tertiaryText)
             }
             Spacer()
+            // The name is the only editable identity a device has, and until
+            // 2026-08-25 the app offered no way to change it after adoption —
+            // the F8 clobber could be made but never repaired (bench finding,
+            // David's ruling: fix now). Same generic rename the sensor sheet
+            // uses; the hub's endpoint never cared what role the device has.
+            Button("Rename") {
+                renameText = device.displayName ?? ""
+                renaming = device
+            }
+                .buttonStyle(.borderless)
+                .accessibilityIdentifier("rename-\(device.deviceId)")
             // Not `.destructive`: unadopt is a reversible soft flag — name,
             // thresholds, bindings and history all survive, and the dialog says
             // so. Red is reserved for the one hard delete (Clear). UX review A5.
@@ -690,6 +721,24 @@ struct SystemView: View {
             revokeProblem = HumanError.describe(error)
         }
         await loadClients()
+    }
+
+    private func rename(_ device: Components.Schemas.DeviceView) async {
+        unadoptProblem = nil
+        let wanted = renameText.trimmingCharacters(in: .whitespaces)
+        do {
+            try await model.client?.rename(
+                deviceId: device.deviceId, to: wanted.isEmpty ? nil : wanted
+            )
+        } catch {
+            log.error("rename failed: \(String(describing: error))")
+            unadoptProblem = HumanError.describe(error)
+        }
+        await loadHardware()
+        // Names render on Lighting and in the schedule pickers through the
+        // catalog; without this refresh, Devices tells one story and Lighting
+        // another until something else refetches.
+        await model.catalog?.refresh()
     }
 
     private func unadopt(_ device: Components.Schemas.DeviceView) async {
