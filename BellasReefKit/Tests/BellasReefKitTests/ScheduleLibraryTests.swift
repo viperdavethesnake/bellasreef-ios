@@ -84,6 +84,31 @@ struct ScheduleLibraryTests {
         #expect(await calls.count == 1)
     }
 
+    @Test("assign: a refusal does not re-read — the hub's copy did not change")
+    func assignRefusalDoesNotRefresh() async throws {
+        // Pins the gate the backlog flagged as implemented-but-untested: a
+        // widened `if case .assigned` (say, refreshing on every outcome)
+        // would spend a round trip re-reading a library the hub just said it
+        // did not touch — and this fence is what would catch the widening.
+        let calls = CallCounter()
+        let library = ScheduleLibrary(client: stub { operation in
+            if operation == "listSchedules" {
+                await calls.bump()
+                return (200, json("[]"))
+            }
+            #expect(operation == "assignSchedule")
+            return (409, nil)
+        })
+        let outcome = try await library.assign(
+            channelId: "pi-pwm-0", scheduleId: "6f1e4e2a-1111-4222-8333-444455556666"
+        )
+        guard case .notCommandable = outcome else {
+            Issue.record("expected .notCommandable, got \(outcome)")
+            return
+        }
+        #expect(await calls.count == 0)
+    }
+
     @Test("unassign: a 404 (nothing assigned) re-reads too — a stuck checkmark self-heals")
     func unassignNothingRefreshes() async throws {
         let calls = CallCounter()

@@ -37,6 +37,9 @@ struct ScheduleEditorView: View {
     @State private var draft: [DraftPoint]
     @State private var submitting = false
     @State private var problem: String?
+    /// The Add-menu pick that would move a light off another schedule,
+    /// held while its confirmation dialog is up.
+    @State private var moving: AssignmentSection.Candidate?
 
     init(schedule: Components.Schemas.ScheduleView?) {
         self.schedule = schedule
@@ -245,126 +248,145 @@ struct ScheduleEditorView: View {
         }
     }
 
-    /// Channel multi-select (spec: "Assign = channel multi-select on the
-    /// schedule"). Toggling talks to the hub immediately — assignment is not
-    /// part of the curve draft, and the hub is its authority.
+    /// The honest replacement for the old "Assigned lights" multi-select
+    /// (ruled 2026-08-25, at the bench): that section listed every adopted
+    /// light with a checkmark on the assigned ones, so candidates read as
+    /// assignments, toggling was undiscoverable, and unassign was invisible.
+    /// Now "Assigned" holds exactly what the schedule names — adopted lights
+    /// and ghosts alike, absorbing the old "Still assigned" section — each
+    /// with an explicit Remove, and "Add light…" is a menu of what could be
+    /// added, confirming before it moves a light off another schedule.
+    /// Talking to the hub stays immediate — assignment is not part of the
+    /// curve draft, and the hub is its authority.
     @ViewBuilder
     private func assignSection(_ schedule: Components.Schemas.ScheduleView) -> some View {
-        let lights = (model.catalog?.devices ?? [])
-            .filter { $0.adopted == true && $0.role == "light" }
-            .sorted { $0.deviceId < $1.deviceId }
-        Section("Assigned lights") {
-            if lights.isEmpty {
-                Text("No lights adopted — adopt a PWM channel under System.")
+        // `schedule` is the immutable snapshot captured at init — a
+        // successful remove refreshes `model.library` but never that
+        // snapshot, so a removed row would survive its own Remove button
+        // until the editor is dismissed. Read the live copy instead, falling
+        // back to the snapshot only if the library hasn't loaded.
+        let liveAssigned = model.library?.schedules.first(where: { $0.id == schedule.id })?.assignedChannels
+            ?? schedule.assignedChannels
+        let devices = model.catalog?.devices ?? []
+        let rows = AssignmentSection.assigned(
+            channelIds: liveAssigned, devices: devices,
+            devicesKnown: model.catalog?.state == .loaded
+        )
+        let candidates = AssignmentSection.candidates(
+            for: schedule.id, schedules: model.library?.schedules ?? [schedule],
+            devices: devices
+        )
+        Section("Assigned") {
+            if rows.isEmpty {
+                Text(candidates.isEmpty
+                     ? "No lights adopted — adopt a PWM channel under System."
+                     : "No lights assigned.")
                     .font(Theme.caption)
                     .foregroundStyle(Theme.secondaryText)
             }
-            ForEach(lights, id: \.deviceId) { light in
-                let current = model.library?.schedule(assignedTo: light.deviceId)
-                let isThis = current?.id == schedule.id
-                Button {
-                    Task { await toggle(light.deviceId, schedule: schedule, currentlyThis: isThis) }
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(light.displayName ?? light.deviceId)
-                                .foregroundStyle(Theme.primaryText)
-                            // Display names are not unique (ruled 2026-08-25:
-                            // no enforcement), so a bare name cannot tell the
-                            // operator which silicon they are assigning a
-                            // schedule to — the rehearsal ended with two
-                            // "Light 1" rows indistinguishable here (F8). The
-                            // driver · channel line the Devices screen already
-                            // has is the identity; role is omitted because
-                            // every row in this section is a light.
-                            Text(DeviceSubtitle.text(
-                                driverId: light.driverId, channel: light.channel, role: nil
-                            ))
+            ForEach(rows, id: \.channelId) { row in
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(row.name)
+                            .foregroundStyle(Theme.primaryText)
+                        // Display names are not unique (ruled 2026-08-25: no
+                        // enforcement), so the driver · channel identity the
+                        // Devices screen has keeps same-named lights apart.
+                        if let subtitle = row.subtitle {
+                            Text(subtitle)
                                 .font(Theme.caption)
                                 .foregroundStyle(Theme.tertiaryText)
-                            if let current, !isThis {
-                                Text("Now on \(current.name) — selecting moves it.")
-                                    .font(Theme.caption)
-                                    .foregroundStyle(Theme.secondaryText)
-                            }
                         }
-                        Spacer()
-                        if isThis {
-                            Image(systemName: "checkmark")
-                                .foregroundStyle(Theme.accent)
-                        }
-                    }
-                    .frame(minHeight: 44)
-                }
-                .disabled(submitting)
-            }
-        }
-        // `schedule` is the immutable snapshot captured at init — a
-        // successful unassign below refreshes `model.library` but never
-        // that snapshot, so the ghost row would survive its own Unassign
-        // button until the editor is dismissed. Read the live copy instead,
-        // falling back to the snapshot only if the library hasn't loaded.
-        let liveAssigned = model.library?.schedules.first(where: { $0.id == schedule.id })?.assignedChannels
-            ?? schedule.assignedChannels
-        let ghosts = ScheduleGhosts.channels(
-            assigned: liveAssigned, devices: model.catalog?.devices ?? [],
-            devicesKnown: model.catalog?.state == .loaded
-        )
-        if !ghosts.isEmpty {
-            Section {
-                ForEach(ghosts, id: \.self) { channelId in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(model.catalog?.name(for: channelId) ?? channelId)
-                                .foregroundStyle(Theme.primaryText)
+                        if row.adopted == false {
                             Text("Not adopted — output resumes if this channel is adopted again.")
                                 .font(Theme.caption)
                                 .foregroundStyle(Theme.secondaryText)
                         }
-                        Spacer()
-                        Button("Unassign") {
-                            Task { await unassignGhost(channelId) }
-                        }
-                        .font(Theme.caption)
-                        .disabled(submitting)
                     }
+                    Spacer()
+                    Button("Remove") {
+                        Task { await remove(row.channelId) }
+                    }
+                    .font(Theme.caption)
+                    .disabled(submitting)
+                    .accessibilityIdentifier("schedule-remove-\(row.channelId)")
                 }
-            } header: {
-                Text("Still assigned")
+                .frame(minHeight: 44)
             }
+            if !candidates.isEmpty {
+                Menu {
+                    ForEach(candidates, id: \.channelId) { candidate in
+                        Button {
+                            if candidate.currentScheduleName != nil {
+                                moving = candidate
+                            } else {
+                                Task { await add(candidate.channelId, schedule: schedule) }
+                            }
+                        } label: {
+                            // One line per light: the subtitle keeps
+                            // same-named rows apart, and a light that would
+                            // be moved says where it is now.
+                            if let from = candidate.currentScheduleName {
+                                Text("\(candidate.name) · \(candidate.subtitle) — on \(from)")
+                            } else {
+                                Text("\(candidate.name) · \(candidate.subtitle)")
+                            }
+                        }
+                    }
+                } label: {
+                    Text("Add light…")
+                        .frame(minHeight: 44)
+                }
+                .disabled(submitting)
+                .accessibilityIdentifier("schedule-add-light")
+            }
+        }
+        .confirmationDialog(
+            "Move this light?",
+            isPresented: Binding(
+                get: { moving != nil },
+                set: { if !$0 { moving = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: moving
+        ) { candidate in
+            Button("Move \(candidate.name)") {
+                Task { await add(candidate.channelId, schedule: schedule) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { candidate in
+            Text("“\(candidate.name)” is on “\(candidate.currentScheduleName ?? "another schedule")” "
+                 + "now. A light runs one schedule at a time, so it leaves "
+                 + "that one and follows this one immediately.")
         }
     }
 
-    private func toggle(
-        _ channelId: String, schedule: Components.Schemas.ScheduleView, currentlyThis: Bool
-    ) async {
+    /// Assigns one light to this schedule. The hub moves a light off its
+    /// previous schedule as part of the same call — one schedule per light is
+    /// its rule; the move confirmation upstream is courtesy, not mechanism.
+    private func add(_ channelId: String, schedule: Components.Schemas.ScheduleView) async {
         guard let library = model.library else { return }
         submitting = true
         defer { submitting = false }
         problem = nil
         do {
-            if currentlyThis {
-                _ = try await library.unassign(channelId: channelId)
-            } else {
-                switch try await library.assign(channelId: channelId, scheduleId: schedule.id) {
-                case .assigned: break
-                case .notCommandable:
-                    problem = "That channel is observe-only — it accepts no commands."
-                case .unknownSchedule:
-                    problem = "This schedule was deleted on another device."
-                }
+            switch try await library.assign(channelId: channelId, scheduleId: schedule.id) {
+            case .assigned: break
+            case .notCommandable:
+                problem = "That channel is observe-only — it accepts no commands."
+            case .unknownSchedule:
+                problem = "This schedule was deleted on another device."
             }
         } catch {
             problem = HumanError.describe(error)
         }
     }
 
-    /// Unassigns a ghost channel — one the schedule still names in
-    /// `assignedChannels` that no adopted light currently claims. Mirrors
-    /// `toggle`'s error handling: `library.unassign` works on non-adopted
-    /// channels (backend verified), so this is the same call with no
-    /// `currentlyThis` branch to take.
-    private func unassignGhost(_ channelId: String) async {
+    /// Removes one assigned channel — adopted or ghost, the same call:
+    /// `library.unassign` works on non-adopted channels (backend verified).
+    /// No confirm: removal drops the light toward 0, the safe direction, and
+    /// adding it back is two taps.
+    private func remove(_ channelId: String) async {
         guard let library = model.library else { return }
         submitting = true
         defer { submitting = false }
