@@ -34,6 +34,13 @@ struct SystemView: View {
     @State private var adopting: Components.Schemas.CapabilityView?
     @State private var unadopting: Components.Schemas.DeviceView?
     @State private var forgetting: Components.Schemas.DeviceView?
+    /// An actuator awaiting the Re-add confirmation. A Detached row is
+    /// precisely where a surviving schedule assignment is most likely, and
+    /// Re-add used to call `readopt()` bare — output resumed at 60 % with no
+    /// warning while the adopt sheet's identical path was guarded (rehearsal
+    /// F6). Sensors still re-add directly; a probe read has no failure mode
+    /// worth the friction, same rule as `AdoptDeviceSheet.isActuator`.
+    @State private var readding: Components.Schemas.DeviceView?
     @State private var unadoptProblem: String?
 
     var body: some View {
@@ -257,6 +264,43 @@ struct SystemView: View {
                  + "already recorded stay in history. A schedule assigned to "
                  + "this channel stays assigned — unassign it under Lighting "
                  + "if the hardware is gone for good.")
+        }
+        .confirmationDialog(
+            "Start real output?",
+            isPresented: Binding(
+                get: { readding != nil },
+                set: { if !$0 { readding = nil } }
+            ),
+            titleVisibility: .visible,
+            presenting: readding
+        ) { device in
+            Button("Re-add \(device.displayName ?? device.deviceId)",
+                   role: .destructive) {
+                Task { await readopt(device) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: { device in
+            // The adopt sheet's ghost warning, word for word where it can be
+            // (rehearsal F6): the two routes claim the same channel and must
+            // carry the same consequence.
+            if let ghost = model.library?.schedule(assignedTo: device.deviceId) {
+                Text("Re-adding starts real output on this channel as soon as "
+                     + "the engine's schedule runs. “\(ghost.name)” is still "
+                     + "assigned to this channel and resumes immediately. Only "
+                     + "re-add hardware you have bench-verified.")
+            } else {
+                Text("Re-adding starts real output on this channel as soon as "
+                     + "the engine's schedule runs. Only re-add hardware you "
+                     + "have bench-verified.")
+            }
+        }
+        // The ghost lookup above reads `model.library?.schedules`, which is
+        // empty until something has fetched it — and the likeliest path here
+        // (Tank → System → Devices) never visits Lighting. Same shape and
+        // reason as AdoptDeviceSheet's `.task`: `refresh()` swallows its own
+        // errors, so a failed fetch just leaves the warning generic.
+        .task {
+            await model.library?.refresh()
         }
         // Same treatment as sign-out: nothing destructive on a single tap,
     }
@@ -526,7 +570,16 @@ struct SystemView: View {
                     .foregroundStyle(Theme.tertiaryText)
             }
             Spacer()
-            Button("Re-add") { Task { await readopt(device) } }
+            Button("Re-add") {
+                // Actuators get the same confirm the adopt sheet gives them
+                // (F6); a sensor re-add starts no output and goes straight
+                // through, the same split as `AdoptDeviceSheet.isActuator`.
+                if device.role != nil {
+                    readding = device
+                } else {
+                    Task { await readopt(device) }
+                }
+            }
                 .buttonStyle(.borderless)
                 .accessibilityIdentifier("readopt-\(device.deviceId)")
             Button("Clear", role: .destructive) { forgetting = device }
@@ -538,9 +591,9 @@ struct SystemView: View {
 
     /// Matches the available-channel rows' voice (`"channel \(capability.channel)"`)
     /// while staying compact for an already-adopted row: a numeric PWM channel
-    /// reads as `ch 1`, a 1-Wire ROM (not a number) is shown bare rather than
-    /// as `ch 28-000000bfe244`. The number is 1-based for the reader and
-    /// 0-based on the wire — see `ChannelLabel`.
+    /// reads as `ch 0`, a 1-Wire ROM (not a number) is shown bare rather than
+    /// as `ch 28-000000bfe244`. Channels are 0-based everywhere, exactly as
+    /// the hub sends them (ruled 2026-08-24, rehearsal F5).
     private func deviceSubtitle(_ device: Components.Schemas.DeviceView) -> String {
         DeviceSubtitle.text(driverId: device.driverId, channel: device.channel, role: device.role)
     }
@@ -551,7 +604,7 @@ struct SystemView: View {
     ) -> some View {
         HStack {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Channel \(ChannelLabel.humanNumber(capability.channel))")
+                Text("Channel \(capability.channel)")
                     .foregroundStyle(Theme.primaryText)
                 // The board's shared identity is in the section header; only
                 // what is particular to this channel is repeated here.

@@ -158,6 +158,16 @@ struct ScheduleEditorView: View {
         }
         .scrollContentBackground(.hidden)
         .reefBackground()
+        // The ghost section below reads `model.catalog?.devices`, which is a
+        // snapshot from whenever something last refreshed it — re-adding a
+        // device on the System tab updates that screen but not this one, so
+        // the editor kept saying "Not adopted — output resumes…" a minute
+        // after the engine was already commanding the channel (rehearsal F7).
+        // Refresh on entry; `refresh()` swallows its own errors, so a failed
+        // fetch just leaves the snapshot as it was.
+        .task {
+            await model.catalog?.refresh()
+        }
         .navigationTitle(schedule == nil ? "New Schedule" : "Edit Schedule")
         .toolbar {
             ToolbarItem(placement: .confirmationAction) {
@@ -259,6 +269,19 @@ struct ScheduleEditorView: View {
                         VStack(alignment: .leading, spacing: 2) {
                             Text(light.displayName ?? light.deviceId)
                                 .foregroundStyle(Theme.primaryText)
+                            // Display names are not unique (ruled 2026-08-25:
+                            // no enforcement), so a bare name cannot tell the
+                            // operator which silicon they are assigning a
+                            // schedule to — the rehearsal ended with two
+                            // "Light 1" rows indistinguishable here (F8). The
+                            // driver · channel line the Devices screen already
+                            // has is the identity; role is omitted because
+                            // every row in this section is a light.
+                            Text(DeviceSubtitle.text(
+                                driverId: light.driverId, channel: light.channel, role: nil
+                            ))
+                                .font(Theme.caption)
+                                .foregroundStyle(Theme.tertiaryText)
                             if let current, !isThis {
                                 Text("Now on \(current.name) — selecting moves it.")
                                     .font(Theme.caption)
