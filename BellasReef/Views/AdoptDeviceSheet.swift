@@ -54,18 +54,15 @@ struct AdoptDeviceSheet: View {
             Form {
                 Section {
                     LabeledContent("Source", value: capability.source.rawValue)
-                    // Displayed 1-based (ruling 2026-08-17); the bind below
-                    // sends `capability.channel` raw, as the hub numbers it.
-                    LabeledContent("Channel", value: ChannelLabel.humanNumber(capability.channel))
+                    // Shown 0-based, exactly as the hub sent it (ruled
+                    // 2026-08-24, rehearsal F5) — the number here matches the
+                    // board silkscreen, the device id, and the audit log, so
+                    // the old "numbered from 1 here" footer has nothing left
+                    // to explain.
+                    LabeledContent("Channel", value: capability.channel)
                     LabeledContent("Driver", value: driverType.rawValue)
                 } header: {
                     Text("Channel")
-                } footer: {
-                    if isActuator {
-                        // The one screen where a person cross-references a
-                        // board. Boards and datasheets count from 0.
-                        Text("Numbered from 1 here; the board prints it from 0, so channel \(ChannelLabel.humanNumber(capability.channel)) is the board's \(capability.channel).")
-                    }
                 }
                 Section("Device") {
                     TextField("Name", text: $name)
@@ -169,6 +166,7 @@ struct AdoptDeviceSheet: View {
         // warning as it was.
         .task {
             await model.library?.refresh()
+            await prefillDetachedName()
         }
     }
 
@@ -183,7 +181,25 @@ struct AdoptDeviceSheet: View {
     private static func seedName(for capability: Components.Schemas.CapabilityView) -> String {
         capability.source.rawValue == "w1-bus"
             ? "Temperature probe"
-            : "Light \(ChannelLabel.humanNumber(capability.channel))"
+            : "Light \(capability.channel)"
+    }
+
+    /// Re-claiming a channel the registry still remembers used to prefill the
+    /// generic seed, and submitting overwrote the detached row's name — two
+    /// devices both called "Light 1" by the end of the rehearsal (finding F8).
+    /// Identity, history and assignment were preserved; only the name was
+    /// clobbered. When the channel matches a detached row, offer that row's
+    /// name instead. The operator can still type over it — which is why the
+    /// swap only happens while the field holds the untouched seed.
+    private func prefillDetachedName() async {
+        await model.catalog?.refresh()
+        guard name == Self.seedName(for: capability),
+              let detached = model.catalog?.devices.first(where: {
+                  $0.deviceId == proposedDeviceId && $0.adopted != true
+              }),
+              let existing = detached.displayName
+        else { return }
+        name = existing
     }
 
     private func adopt() async {

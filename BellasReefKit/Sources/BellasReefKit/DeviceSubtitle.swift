@@ -12,8 +12,12 @@
 public enum DeviceSubtitle {
     public static func text(driverId: String, channel: String?, role: String?) -> String {
         var parts = [driverId]
+        // Channels are shown 0-based, exactly as the hub sent them (ruled
+        // 2026-08-24, rehearsal finding F5: every other voice in the system —
+        // device ids, audit rows, logs, board silkscreen — is 0-based, and the
+        // app's 1-based shift confused the operator at the bench).
         if let channel, !driverId.hasSuffix(channel) {
-            parts.append(Int(channel) != nil ? "ch \(ChannelLabel.humanNumber(channel))" : channel)
+            parts.append(Int(channel) != nil ? "ch \(channel)" : channel)
         }
         if let role { parts.append(role) }
         return parts.joined(separator: " · ")

@@ -16,10 +16,14 @@ struct DeviceSubtitleTests {
         #expect(s == "ds18b20-28-000000bfe244 · temperature")
     }
 
-    @Test("a PWM channel number is shown as the human channel, after the driver")
+    @Test("a PWM channel number is shown verbatim — 0-based, as the hub sent it")
     func pwmChannel() {
+        // Ruled 2026-08-24 (factory-reset rehearsal, F5): device ids, audit
+        // rows, backend logs and board silkscreen all speak 0-based; the app
+        // was the only 1-based voice and it confused the operator at the
+        // bench. `pca9685-0` reads "ch 0", matching its own device id.
         let s = DeviceSubtitle.text(driverId: "pca9685", channel: "0", role: "light")
-        #expect(s == "pca9685 · ch 1 · light")
+        #expect(s == "pca9685 · ch 0 · light")
     }
 
     @Test("no channel, no role: the driver alone")
