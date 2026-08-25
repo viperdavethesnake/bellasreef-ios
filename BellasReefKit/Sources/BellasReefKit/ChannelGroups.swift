@@ -47,17 +47,19 @@ public enum ChannelGroups {
 
         /// What is particular to one channel — a GPIO, say. Empty when the
         /// header already said everything — except on the PCA9685, whose
-        /// announced facts are all board-wide: its rows name the silkscreen
-        /// pin instead, LED0…LED15, the datasheet's own name for the output
-        /// (ruled 2026-08-25). Derived from the channel number, not the wire —
-        /// on this chip they are the same thing.
+        /// announced facts are all board-wide and whose rows therefore read
+        /// bare while every other screen says `pca9685 · ch 0`. Ruled
+        /// 2026-08-25 (second iteration; "LEDn" rejected — the datasheet's
+        /// name for the pin, not the operator's — this is a PWM channel):
+        /// the row carries the full identity, exactly as the Lighting picker
+        /// and the Devices subtitle print it.
         public func rowDetail(for channel: Components.Schemas.CapabilityView) -> String {
             let sharedKeys = Set(shared.map(\.0))
             var parts = flat(channel)
                 .filter { !sharedKeys.contains($0.0) }
                 .map { "\($0.0) \($0.1)" }
             if source == .pca9685 {
-                parts.insert("LED\(channel.channel)", at: 0)
+                parts.insert("pca9685 · ch \(channel.channel)", at: 0)
             }
             return parts.joined(separator: " · ")
         }

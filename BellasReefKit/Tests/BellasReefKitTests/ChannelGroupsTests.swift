@@ -43,26 +43,29 @@ struct ChannelGroupsTests {
         #expect(g.title == "PCA9685 board")
         #expect(g.subtitle == "address 0x40 · bus 1")
         // Not "": every fact the hub announces for a PCA channel is
-        // board-wide and lives in the header, but the row still names its
-        // silkscreen pin (ruled 2026-08-25) — see `pcaRowNamesItsPin`.
-        #expect(g.rowDetail(for: g.channels[0]) == "LED1")
+        // board-wide and lives in the header, but the row still carries the
+        // same identity Lighting and Devices print (ruled 2026-08-25) — see
+        // `pcaRowSpeaksTheDeviceVoice`.
+        #expect(g.rowDetail(for: g.channels[0]) == "pca9685 · ch 1")
     }
 
-    @Test("a PCA9685 row names its silkscreen pin, LEDn, as the board prints it")
-    func pcaRowNamesItsPin() {
+    @Test("a PCA9685 row carries the identity Lighting prints: pca9685 · ch n")
+    func pcaRowSpeaksTheDeviceVoice() {
         // The RP1 rows earn their detail line from a real per-channel fact
         // (the gpio mux); the PCA9685 announces only board-wide facts, which
-        // the header absorbs, and its rows read bare. But the operator places
-        // wires by the silkscreen, which prints LED0…LED15 — the channel
-        // number under the datasheet's own name for the output. Ruled
-        // 2026-08-25: say it on the row.
+        // the header absorbs, and its rows read bare — one voice in Hardware,
+        // another (`pca9685 · ch 0`) everywhere else. Ruled 2026-08-25, at
+        // the bench, second iteration ("LEDn" rejected — the datasheet's
+        // name, not the operator's; this is a PWM channel): every PCA row
+        // carries the full identity exactly as the Lighting picker and the
+        // Devices subtitle already say it.
         let free = [
             cap(.pca9685, "0", ["address": "0x40", "bus": 1]),
             cap(.pca9685, "15", ["address": "0x40", "bus": 1]),
         ]
         let g = ChannelGroups.group(free)[0]
-        #expect(g.rowDetail(for: g.channels[0]) == "LED0")
-        #expect(g.rowDetail(for: g.channels[1]) == "LED15")
+        #expect(g.rowDetail(for: g.channels[0]) == "pca9685 · ch 0")
+        #expect(g.rowDetail(for: g.channels[1]) == "pca9685 · ch 15")
     }
 
     @Test("a per-channel value stays on the row")
