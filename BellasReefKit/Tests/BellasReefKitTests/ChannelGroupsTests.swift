@@ -42,7 +42,27 @@ struct ChannelGroupsTests {
         let g = ChannelGroups.group(free)[0]
         #expect(g.title == "PCA9685 board")
         #expect(g.subtitle == "address 0x40 · bus 1")
-        #expect(g.rowDetail(for: g.channels[0]) == "")
+        // Not "": every fact the hub announces for a PCA channel is
+        // board-wide and lives in the header, but the row still names its
+        // silkscreen pin (ruled 2026-08-25) — see `pcaRowNamesItsPin`.
+        #expect(g.rowDetail(for: g.channels[0]) == "LED1")
+    }
+
+    @Test("a PCA9685 row names its silkscreen pin, LEDn, as the board prints it")
+    func pcaRowNamesItsPin() {
+        // The RP1 rows earn their detail line from a real per-channel fact
+        // (the gpio mux); the PCA9685 announces only board-wide facts, which
+        // the header absorbs, and its rows read bare. But the operator places
+        // wires by the silkscreen, which prints LED0…LED15 — the channel
+        // number under the datasheet's own name for the output. Ruled
+        // 2026-08-25: say it on the row.
+        let free = [
+            cap(.pca9685, "0", ["address": "0x40", "bus": 1]),
+            cap(.pca9685, "15", ["address": "0x40", "bus": 1]),
+        ]
+        let g = ChannelGroups.group(free)[0]
+        #expect(g.rowDetail(for: g.channels[0]) == "LED0")
+        #expect(g.rowDetail(for: g.channels[1]) == "LED15")
     }
 
     @Test("a per-channel value stays on the row")

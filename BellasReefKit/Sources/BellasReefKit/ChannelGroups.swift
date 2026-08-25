@@ -46,13 +46,20 @@ public enum ChannelGroups {
         }
 
         /// What is particular to one channel — a GPIO, say. Empty when the
-        /// header already said everything.
+        /// header already said everything — except on the PCA9685, whose
+        /// announced facts are all board-wide: its rows name the silkscreen
+        /// pin instead, LED0…LED15, the datasheet's own name for the output
+        /// (ruled 2026-08-25). Derived from the channel number, not the wire —
+        /// on this chip they are the same thing.
         public func rowDetail(for channel: Components.Schemas.CapabilityView) -> String {
             let sharedKeys = Set(shared.map(\.0))
-            return flat(channel)
+            var parts = flat(channel)
                 .filter { !sharedKeys.contains($0.0) }
                 .map { "\($0.0) \($0.1)" }
-                .joined(separator: " · ")
+            if source == .pca9685 {
+                parts.insert("LED\(channel.channel)", at: 0)
+            }
+            return parts.joined(separator: " · ")
         }
 
         /// The chip's own account, one line, in the spec's exact shapes:
