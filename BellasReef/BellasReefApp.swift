@@ -106,6 +106,13 @@ final class AppModel {
         // Staleness follows each probe's declared cadence (UX review A3); the
         // catalog is where the cadence lives, the monitor is what judges age.
         monitor.cadenceOf = { [weak catalog] id in catalog?.device(id)?.pollIntervalS }
+        // "Waiting for a sensor" only when a sensor is adopted and unheard;
+        // zero adopted sensors is a configuration, not a fault (rehearsal F3).
+        // Detached rows don't count — a released probe is not expected to report.
+        monitor.adoptedSensorCount = { [weak catalog] in
+            guard let catalog, catalog.state == .loaded else { return nil }
+            return catalog.sensors.filter { $0.adopted == true }.count
+        }
         notice = nil
         phase = .paired(hub)
         monitor.start()

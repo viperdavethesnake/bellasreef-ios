@@ -130,10 +130,25 @@ struct WaitingForSensors: View {
 
 /// The safety line. Teal / amber / red, and red only ever means safety.
 struct StatusLine: View {
+    /// Which of the monitor's two voices this instance speaks with. The Tank
+    /// tab reads the sensor-aware pair; a control surface reads the
+    /// connection-scoped pair — sensor copy on the Lighting tab described a
+    /// different screen's problem (rehearsal F4).
+    enum Scope { case tank, connection }
+
     let monitor: TankMonitor
     /// Where the coverage note comes from. Optional so a caller without a
     /// catalog still gets the plain line.
     var catalog: DeviceCatalog? = nil
+    var scope: Scope = .tank
+
+    private var tone: HealthTone {
+        scope == .tank ? monitor.tone : monitor.connectionTone
+    }
+
+    private var baseLine: String {
+        scope == .tank ? monitor.statusLine : monitor.connectionLine
+    }
 
     var body: some View {
         // A clock, for the same reason the hero has one. `tone` and
@@ -151,12 +166,12 @@ struct StatusLine: View {
     /// probe has no band, the line says so. Only on the clear line — every
     /// other state already names its problem.
     private var text: String {
-        guard monitor.tone == .allClear, let catalog else { return monitor.statusLine }
+        guard tone == .allClear, let catalog else { return baseLine }
         let note = MonitoringCoverage.note(sensorIds: monitor.sensorIds) { id in
             let device = catalog.device(id)
             return device?.alertMin != nil && device?.alertMax != nil
         }
-        return note.map { "\(monitor.statusLine) · \($0)" } ?? monitor.statusLine
+        return note.map { "\(baseLine) · \($0)" } ?? baseLine
     }
 
     private var line: some View {
@@ -166,11 +181,11 @@ struct StatusLine: View {
             // B8); steady states stay still.
             Image(systemName: "circle.fill")
                 .font(.system(size: 8))
-                .foregroundStyle(monitor.tone.color)
-                .symbolEffect(.pulse, options: .nonRepeating, value: monitor.tone)
+                .foregroundStyle(tone.color)
+                .symbolEffect(.pulse, options: .nonRepeating, value: tone)
             Text(text)
                 .font(Theme.caption)
-                .foregroundStyle(monitor.tone == .allClear ? Theme.secondaryText : monitor.tone.color)
+                .foregroundStyle(tone == .allClear ? Theme.secondaryText : tone.color)
             Spacer()
         }
         .padding(.vertical, 4)
