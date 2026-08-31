@@ -40,7 +40,14 @@ public enum HumanError {
 
     /// One short sentence for a screen. The full error belongs at the call
     /// site's log line, never here.
-    public static func describe(_ error: any Error) -> String {
+    ///
+    /// `host`, when the caller has one — the pairing card knows
+    /// `hub.baseURL.host` before it knows anything else about the hub — is
+    /// folded into the handful of `URLError` cases where naming the address
+    /// is the actionable part of the sentence. Callers that never had a host
+    /// in scope (a threshold save, once already connected) omit it and get
+    /// the address-shaped phrasing without a name in it.
+    public static func describe(_ error: any Error, host: String? = nil) -> String {
         // swift-openapi-runtime's own error: unwrap it rather than showing
         // its `description`, which prints operationID, request, response and
         // body verbatim — precisely the raw dump this type exists to hide.
@@ -48,7 +55,7 @@ public enum HumanError {
             if let status = clientError.response?.status.code {
                 return "The hub answered with an error (code \(status))."
             }
-            return describe(clientError.underlyingError)
+            return describe(clientError.underlyingError, host: host)
         }
         // `HubClient.ClientError`'s cases already carry a short, hub-authored
         // sentence (a validation reason from the hub, or a fixed phrase) —
@@ -59,13 +66,47 @@ public enum HumanError {
         }
         if let url = error as? URLError {
             switch url.code {
-            case .notConnectedToInternet, .cannotConnectToHost, .cannotFindHost,
-                 .networkConnectionLost, .timedOut, .dnsLookupFailed:
-                return "The hub did not answer. Check that this device is on the tank's network."
+            case .cannotConnectToHost:
+                let where_ = host.map { "at \($0)" } ?? "there"
+                return "Nothing answered \(where_). Check the address, and that the hub is "
+                    + "powered on and on this network."
+            case .cannotFindHost:
+                let what = host.map { "\($0)" } ?? "that address"
+                return "Could not find \(what) on this network. Check that it's typed correctly."
+            case .dnsLookupFailed:
+                let what = host.map { "\($0)" } ?? "that address"
+                return "Could not look up \(what). Check that it's typed correctly."
+            case .networkConnectionLost:
+                return "The connection to the hub dropped partway through. Try again."
+            case .timedOut:
+                return "The hub did not answer in time. Check that this device is on the "
+                    + "tank's network."
+            case .notConnectedToInternet:
+                return "This device has no network connection. Check Wi-Fi and try again."
             default:
                 break
             }
         }
+        // Anything else: the error's own words, but only when they already
+        // read as one human sentence — the same "Domain=/UserInfo=" shape
+        // that this type exists to keep off a screen can arrive wrapped in
+        // ways the cases above don't unwrap (a POSIXError, a raw NSError).
+        // Heuristic, not a parser: reject anything that smells like a
+        // transport dump and fall back to the generic line.
+        let described = error.localizedDescription
+        if !described.isEmpty, !looksLikeADump(described) {
+            return described
+        }
         return "Something went wrong talking to the hub."
+    }
+
+    /// True for text that reads like an `NSError` transport dump rather than
+    /// a sentence a person wrote — the shape this whole type exists to keep
+    /// off a screen. Not exhaustive by design: a false negative just falls
+    /// through to `localizedDescription` verbatim, a false positive falls
+    /// back to the generic line, and both are the safe direction to be
+    /// wrong in.
+    private static func looksLikeADump(_ text: String) -> Bool {
+        text.contains("Domain=") || text.contains("UserInfo=") || text.contains("Code=")
     }
 }

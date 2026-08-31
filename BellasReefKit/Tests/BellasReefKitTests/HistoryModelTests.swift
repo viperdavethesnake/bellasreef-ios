@@ -74,7 +74,7 @@ struct HistoryModelTests {
         }
         #expect(!why.contains("operationID"))
         #expect(!why.contains("NSURLErrorDomain"))
-        #expect(why == "The hub did not answer. Check that this device is on the tank's network.")
+        #expect(why == "The hub did not answer in time. Check that this device is on the tank's network.")
     }
 
     @Test("reload() is single-flight: a second call cancels the first's load task")

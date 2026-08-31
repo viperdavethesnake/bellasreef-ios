@@ -2,7 +2,10 @@
 
 import BellasReefAPI
 import BellasReefKit
+import OSLog
 import SwiftUI
+
+private let log = Logger(subsystem: "com.bellasreef.app", category: "pairing")
 
 /// Discovery → identify → pair, per auth.md §2.
 struct PairingFlow: View {
@@ -373,7 +376,12 @@ struct HubIdentifyCard: View {
         do {
             info = try await client.info()
         } catch {
-            problem = "\(error)"
+            // The raw error — a swift-openapi `ClientError` interpolation,
+            // NSURLErrorDomain code, UserInfo and all — used to render
+            // straight into this screen's ContentUnavailableView. `problem`
+            // is what a person reads; the full trace goes to the log instead.
+            log.error("identify failed: \(String(describing: error))")
+            problem = HumanError.describe(error, host: hub.baseURL.host)
         }
     }
 
