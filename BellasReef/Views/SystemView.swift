@@ -31,6 +31,11 @@ struct SystemView: View {
     /// — never fetched successfully — distinct from a successful fetch that
     /// came back empty; see `ChannelGroups.Group.stateLine`.
     @State private var chipStates: [Components.Schemas.ChipStateView]?
+    /// The hub machine's own vitals (`GET /api/v1/hub-status`). `nil` after a
+    /// completed load means "not yet" — a fresh boot or a pre-4.3.0 hub —
+    /// which the leaf words as unavailable, never as an error.
+    @State private var hubStatus: Components.Schemas.HubStatusView?
+    @State private var hubStatusLoaded = false
     @State private var adopting: Components.Schemas.CapabilityView?
     @State private var unadopting: Components.Schemas.DeviceView?
     @State private var forgetting: Components.Schemas.DeviceView?
@@ -91,6 +96,14 @@ struct SystemView: View {
                     }
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("system-hardware")
+
+                    NavigationLink {
+                        hubStatusLeaf
+                    } label: {
+                        LabeledContent("Hub status") { Text(hubStatusSummary) }
+                    }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("system-hub-status")
 
                     NavigationLink {
                         accessLeaf
@@ -171,6 +184,12 @@ struct SystemView: View {
     private var accessSummary: String {
         guard let clients else { return clientsFailed ? "—" : "…" }
         return clients.count == 1 ? "1 device paired" : "\(clients.count) devices paired"
+    }
+
+    private var hubStatusSummary: String {
+        guard let hubStatus else { return hubStatusLoaded ? "—" : "…" }
+        let temp = HubStatusFormat.temperatureLine(tempC: hubStatus.tempC)
+        return "\(temp) · load \(String(format: "%.2f", hubStatus.load1m))"
     }
 
     // ---------------------------------------------------------------- leaves
@@ -392,6 +411,95 @@ struct SystemView: View {
         .reefBackground()
         .navigationTitle("Hardware")
         .refreshable { await loadHardware() }
+    }
+
+
+    /// The hub machine itself: temperature, load, memory, uptime. Read-only
+    /// vitals, refreshed with the leaf — the backend publishes a snapshot
+    /// every 30 s, so "Updated" is honest, not decorative.
+    private var hubStatusLeaf: some View {
+        List {
+            if let status = hubStatus {
+                Section {
+                    LabeledContent("Temperature") {
+                        Text(HubStatusFormat.temperatureLine(tempC: status.tempC))
+                            .font(Theme.value)
+                            .foregroundStyle(Theme.primaryText)
+                    }
+                    .frame(minHeight: 44)
+                    LabeledContent("Load") {
+                        Text(HubStatusFormat.loadLine(
+                            load1m: status.load1m, load5m: status.load5m,
+                            load15m: status.load15m))
+                            .font(Theme.value)
+                            .foregroundStyle(Theme.primaryText)
+                    }
+                    .frame(minHeight: 44)
+                    LabeledContent("Cores", value: "\(status.cpuCount)")
+                        .frame(minHeight: 44)
+                } footer: {
+                    Text("Load is the 1, 5 and 15 minute averages; "
+                        + "a value near the core count means saturated.")
+                }
+
+                Section {
+                    VStack(alignment: .leading, spacing: 6) {
+                        HStack {
+                            Text("Memory").foregroundStyle(Theme.primaryText)
+                            Spacer()
+                            Text(HubStatusFormat.memoryLine(
+                                totalKB: Int(status.memTotalKb),
+                                availableKB: Int(status.memAvailableKb)))
+                                .font(Theme.value)
+                                .foregroundStyle(Theme.secondaryText)
+                        }
+                        GeometryReader { geo in
+                            ZStack(alignment: .leading) {
+                                Capsule().fill(Theme.surfaceRaised)
+                                Capsule()
+                                    .fill(Theme.accent)
+                                    .frame(width: max(
+                                        2,
+                                        geo.size.width * HubStatusFormat.memoryFraction(
+                                            totalKB: Int(status.memTotalKb),
+                                            availableKB: Int(status.memAvailableKb))))
+                            }
+                        }
+                        .frame(height: 8)
+                    }
+                    .padding(.vertical, 4)
+                }
+
+                Section {
+                    LabeledContent("Up") {
+                        Text(HubStatusFormat.uptimeLine(seconds: status.uptimeS))
+                            .font(Theme.value)
+                            .foregroundStyle(Theme.primaryText)
+                    }
+                    .frame(minHeight: 44)
+                    LabeledContent("Updated") {
+                        Text(RelativeAge.describe(from: status.updatedAt))
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                    .frame(minHeight: 44)
+                } footer: {
+                    Text("Vitals of the hub machine itself, as hardware-io last "
+                        + "published them. Pull to refresh.")
+                }
+            } else if hubStatusLoaded {
+                Text("The hub has not published its vitals yet — "
+                    + "a fresh start, or a hub release without this surface.")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.tertiaryText)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .scrollContentBackground(.hidden)
+        .reefBackground()
+        .navigationTitle("Hub status")
+        .refreshable { await loadHubStatus() }
+        .task { await loadHubStatus() }
     }
 
     /// Who may talk to the hub, and this device's own way out.
@@ -666,6 +774,7 @@ struct SystemView: View {
         // another's answer, so none waits for it.
         async let devices: Void = loadClients()
         async let hardware: Void = loadHardware()
+        async let vitals: Void = loadHubStatus()
         do {
             hubName = try await model.client?.info().name
             hubNameFailed = false
@@ -674,6 +783,23 @@ struct SystemView: View {
         }
         await devices
         await hardware
+        await vitals
+    }
+
+    private func loadHubStatus() async {
+        guard let client = model.client else {
+            hubStatusLoaded = true
+            return
+        }
+        // Own do/catch, like chip state: a hub without this surface is
+        // expected, not a fetch problem for the rest of the tab. Stale
+        // beats wiped on a transient failure.
+        do {
+            hubStatus = try await client.hubStatus()
+        } catch {
+            log.info("hub status unavailable: \(String(describing: error))")
+        }
+        hubStatusLoaded = true
     }
 
     private func loadClients() async {
