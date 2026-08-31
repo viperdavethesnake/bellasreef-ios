@@ -2,7 +2,10 @@
 
 import BellasReefAPI
 import BellasReefKit
+import OSLog
 import SwiftUI
+
+private let log = Logger(subsystem: "com.bellasreef.app", category: "sensor-detail")
 
 /// Everything about one probe: what it is called, what it reads, and the band
 /// it is expected to stay inside.
@@ -212,13 +215,16 @@ struct SensorDetailSheet: View {
                 clearMargin: parseDelta(clearMargin)
             )
             dismiss()
-        } catch let error as HubClient.ClientError {
-            // Inline, next to the fields, and in the hub's own words. A band
-            // whose clear zone is empty is refused with a sentence that explains
-            // why; replacing it with "invalid input" would throw that away.
-            problem = error.description
         } catch {
-            problem = error.localizedDescription
+            // `HumanError.describe` already special-cases `HubClient.ClientError`
+            // to its own `.description` — inline, next to the fields, in the
+            // hub's own words. A band whose clear zone is empty is refused with
+            // a sentence that explains why; replacing it with "invalid input"
+            // would throw that away. Anything else (a transport failure) used
+            // to render as `error.localizedDescription`, which for a wrapped
+            // `ClientError` is the same raw dump this type exists to hide.
+            log.error("sensor save failed: \(String(describing: error))")
+            problem = HumanError.describe(error)
         }
     }
 }

@@ -104,7 +104,7 @@ struct HumanErrorTests {
         let text = HumanError.describe(wrapped)
         #expect(!text.contains("operationID"))
         #expect(!text.contains("causeDescription"))
-        #expect(text == "The hub did not answer. Check that this device is on the tank's network.")
+        #expect(text == "The hub did not answer in time. Check that this device is on the tank's network.")
     }
 
     @Test("a ClientError carrying a real HTTP response names the status, not the raw body")
@@ -119,6 +119,88 @@ struct HumanErrorTests {
         )
         let text = HumanError.describe(wrapped)
         #expect(text == "The hub answered with an error (code 503).")
+    }
+
+    // MARK: describe — the connect-screen bug (raw ClientError dump instead
+    // of one sentence). `cannotConnectToHost` is the exact case a fresh
+    // simulator hit typing an unreachable IP into "By address".
+
+    @Test("cannotConnectToHost with a known host names it")
+    func cannotConnectToHostWithHostNamesIt() {
+        let text = HumanError.describe(URLError(.cannotConnectToHost), host: "192.168.1.250")
+        #expect(text == "Nothing answered at 192.168.1.250. Check the address, and that the "
+                + "hub is powered on and on this network.")
+    }
+
+    @Test("cannotConnectToHost with no host reads without one")
+    func cannotConnectToHostWithoutHost() {
+        let text = HumanError.describe(URLError(.cannotConnectToHost))
+        #expect(text == "Nothing answered there. Check the address, and that the hub is "
+                + "powered on and on this network.")
+    }
+
+    @Test("cannotFindHost names the host when known")
+    func cannotFindHostNamesHost() {
+        let text = HumanError.describe(URLError(.cannotFindHost), host: "reef-typo.local")
+        #expect(text == "Could not find reef-typo.local on this network. Check that it's "
+                + "typed correctly.")
+    }
+
+    @Test("dnsLookupFailed names the host when known")
+    func dnsLookupFailedNamesHost() {
+        let text = HumanError.describe(URLError(.dnsLookupFailed), host: "reef-typo.local")
+        #expect(text == "Could not look up reef-typo.local. Check that it's typed correctly.")
+    }
+
+    @Test("networkConnectionLost reads as a dropped connection")
+    func networkConnectionLostReadsAsDropped() {
+        let text = HumanError.describe(URLError(.networkConnectionLost))
+        #expect(text == "The connection to the hub dropped partway through. Try again.")
+    }
+
+    @Test("notConnectedToInternet reads as a local network problem")
+    func notConnectedToInternetReadsAsLocal() {
+        let text = HumanError.describe(URLError(.notConnectedToInternet))
+        #expect(text == "This device has no network connection. Check Wi-Fi and try again.")
+    }
+
+    @Test("cannotConnectToHost wrapped in ClientError still gets the host, unwrapped")
+    func wrappedCannotConnectToHostStillGetsHost() {
+        let wrapped = ClientError(
+            operationID: "info",
+            operationInput: "unused" as any Sendable,
+            causeDescription: "cannot connect to host",
+            underlyingError: URLError(.cannotConnectToHost)
+        )
+        let text = HumanError.describe(wrapped, host: "192.168.1.250")
+        #expect(text == "Nothing answered at 192.168.1.250. Check the address, and that the "
+                + "hub is powered on and on this network.")
+    }
+
+    @Test("a raw NSError transport dump is rejected, not shown verbatim")
+    func rawTransportDumpIsRejected() {
+        // A domain neither `URLError` nor `HubClient.ClientError` bridges
+        // from — this is the shape a `ClientError`'s `description` (not its
+        // `underlyingError`) produces if it were ever shown directly, and
+        // the exact bug on the connect screen: the transport trace,
+        // verbatim, on a phone.
+        let dump = NSError(
+            domain: "some.other.transport",
+            code: -1004,
+            userInfo: [NSLocalizedDescriptionKey: "Domain=NSURLErrorDomain Code=-1004 "
+                       + "\"Could not connect to the server.\" UserInfo={...}"]
+        )
+        let text = HumanError.describe(dump)
+        #expect(!text.contains("Domain="))
+        #expect(!text.contains("UserInfo="))
+        #expect(text == "Something went wrong talking to the hub.")
+    }
+
+    @Test("a genuinely human localizedDescription passes through")
+    func humanLocalizedDescriptionPassesThrough() {
+        let text = HumanError.describe(RuntimeErrorStandIn.unexpected)
+        #expect(!text.isEmpty)
+        #expect(!text.contains("Domain="))
     }
 }
 
