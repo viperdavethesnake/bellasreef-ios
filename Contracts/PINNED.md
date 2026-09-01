@@ -6,12 +6,17 @@ reviewable diff rather than something that shifts under the app.
 
 | | |
 |---|---|
-| Backend commit | `e70beac7` |
-| CI run | [`32563539855`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/32563539855) (`client-contracts` artifact) |
-| Pinned on | 2026-08-23 |
-| OpenAPI | 3.1.0, 27 paths |
-| Contracts version | 4.2.0 |
+| Backend commit | `0eeae2b3` (PR #92, `feat/hub-status-backend`) |
+| CI run | [`33448732731`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/33448732731) (`client-contracts` artifact) |
+| Pinned on | 2026-08-31 |
+| OpenAPI | 3.1.0, 28 paths |
+| Contracts version | 4.3.0 |
 | Frame schema | v1 |
+
+Pinned from the PR's own CI run rather than main — the artifact is
+byte-identical to what the squash-merge produces, and waiting on the merge
+would have serialised two repos' work for no diff. Re-pin from main after
+the merge if the run id matters for provenance.
 
 ## Refreshing
 
@@ -123,3 +128,18 @@ is new `HubClient` wrappers and new screens, not repair.
 
 `forgetDevice` changed description text only — same response codes, no
 call-site change.
+
+## What 4.2.0 → 4.3.0 added
+
+The hub status page (backend spec 2026-08-31): the hub machine's own vitals
+on the System tab.
+
+| Symbol | Why it was missing from the app |
+|---|---|
+| `GET /api/v1/hub-status` (`getHubStatus`) | the Hub status leaf had no data source |
+| `HubStatusView` | load 1/5/15, cores, memory total/available (kB), nullable `temp_c`, uptime, `updated_at` |
+
+Additive; no generated type changed shape, no fixture broke. 404 is
+documented ("no host status published yet") and the wrapper returns `nil`
+for it — a fresh boot or a pre-4.3.0 hub reads as unavailable, not as an
+error.

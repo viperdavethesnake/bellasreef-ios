@@ -263,6 +263,23 @@ public actor HubClient {
         }
     }
 
+    /// The hub machine's own vitals (`GET /api/v1/hub-status`) — the Hub
+    /// status leaf's data source. `nil` is "not yet": a fresh boot that has
+    /// not published its first snapshot, or a pre-4.3.0 hub with no such
+    /// endpoint — either way something the leaf renders as unavailable, not
+    /// as a failure.
+    public func hubStatus() async throws -> Components.Schemas.HubStatusView? {
+        switch try await client.getHubStatus() {
+        case let .ok(response): return try response.body.json
+        case .notFound: return nil
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the hub-status query")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("hub-status returned \(statusCode)")
+        }
+    }
+
     /// Every documented ending of `POST /api/v1/devices`. Distinct cases
     /// because each needs different words and a different way out — the 409
     /// in particular means the list on screen is stale, not that the operator
