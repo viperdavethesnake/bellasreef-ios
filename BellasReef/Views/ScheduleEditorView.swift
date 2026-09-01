@@ -68,21 +68,16 @@ struct ScheduleEditorView: View {
         )
     }
 
-    /// The draft as a curve, when it validates — drives both the preview and
-    /// the Save button. Goes through the validated wire request rather than
-    /// `draft` directly, so this is provably the same curve `save()` would
-    /// send.
+    /// The draft as a curve from points alone — renders before a name is
+    /// typed, same as the editor always has. `Save`'s availability still
+    /// gates on the full `validate()` below, not this.
     private var draftCurve: ScheduleCurve? {
-        guard case .success(let request) = scheduleDraft.validate() else { return nil }
-        let points = request.points.compactMap { point -> ScheduleCurve.Point? in
-            ScheduleCurve.seconds(fromWireTime: point.at).map { ScheduleCurve.Point(seconds: $0, duty: point.duty) }
-        }
-        return ScheduleCurve(points: points, zoneIdentifier: request.zone ?? TimeZone.current.identifier)
+        scheduleDraft.curvePreview
     }
 
     private var validationText: String? {
-        guard case .failure(let message) = scheduleDraft.validate() else { return nil }
-        return message
+        guard case .failure(let invalid) = scheduleDraft.validate() else { return nil }
+        return invalid.message
     }
 
     var body: some View {

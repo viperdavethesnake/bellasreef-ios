@@ -25,10 +25,10 @@ struct ScheduleDraftTests {
     @Test("an empty name fails first, even with otherwise-valid points")
     func emptyName() {
         let result = draft(name: "   ").validate()
-        guard case .failure(let message) = result else {
+        guard case .failure(let invalid) = result else {
             Issue.record("expected failure"); return
         }
-        #expect(message == "The schedule needs a name.")
+        #expect(invalid.message == "The schedule needs a name.")
     }
 
     @Test("an unparseable or out-of-range duty fails")
@@ -37,19 +37,19 @@ struct ScheduleDraftTests {
             .init(seconds: 0, dutyPercentText: "abc"),
             .init(seconds: 100, dutyPercentText: "50"),
         ]).validate()
-        guard case .failure(let message) = unparseable else {
+        guard case .failure(let invalid) = unparseable else {
             Issue.record("expected failure"); return
         }
-        #expect(message == "Brightness is 0–100%.")
+        #expect(invalid.message == "Brightness is 0–100%.")
 
         let outOfRange = draft(points: [
             .init(seconds: 0, dutyPercentText: "101"),
             .init(seconds: 100, dutyPercentText: "50"),
         ]).validate()
-        guard case .failure(let message) = outOfRange else {
+        guard case .failure(let invalid2) = outOfRange else {
             Issue.record("expected failure"); return
         }
-        #expect(message == "Brightness is 0–100%.")
+        #expect(invalid2.message == "Brightness is 0–100%.")
     }
 
     @Test("two points at the same time fail, even when both have legal duties")
@@ -58,28 +58,28 @@ struct ScheduleDraftTests {
             .init(seconds: 100, dutyPercentText: "20"),
             .init(seconds: 100, dutyPercentText: "80"),
         ]).validate()
-        guard case .failure(let message) = result else {
+        guard case .failure(let invalid) = result else {
             Issue.record("expected failure"); return
         }
-        #expect(message == "Two points share a time.")
+        #expect(invalid.message == "Two points share a time.")
     }
 
     @Test("fewer than two points fails")
     func tooFewPoints() {
         let result = draft(points: [.init(seconds: 0, dutyPercentText: "50")]).validate()
-        guard case .failure(let message) = result else {
+        guard case .failure(let invalid) = result else {
             Issue.record("expected failure"); return
         }
-        #expect(message == "A curve needs at least two points.")
+        #expect(invalid.message == "A curve needs at least two points.")
     }
 
     @Test("zero points fails with the two-points message, not the duplicate-time one")
     func zeroPoints() {
         let result = draft(points: []).validate()
-        guard case .failure(let message) = result else {
+        guard case .failure(let invalid) = result else {
             Issue.record("expected failure"); return
         }
-        #expect(message == "A curve needs at least two points.")
+        #expect(invalid.message == "A curve needs at least two points.")
     }
 
     @Test("a valid draft succeeds: sorted, wire-encoded, trimmed, duty as a fraction")
@@ -99,6 +99,30 @@ struct ScheduleDraftTests {
         #expect(request.zone == "America/Los_Angeles")
         #expect(request.points.map(\.at) == ["08:00:00", "20:00:00"])
         #expect(request.points.map(\.duty) == [0.2, 0.8])
+    }
+
+    // MARK: curvePreview
+
+    @Test("a draft with valid points but an empty name still previews — validate() still fails")
+    func previewIgnoresName() {
+        let nameless = draft(name: "   ", points: [
+            .init(seconds: 28_800, dutyPercentText: "20"),
+            .init(seconds: 72_000, dutyPercentText: "80"),
+        ])
+        #expect(nameless.curvePreview != nil)
+        guard case .failure(let invalid) = nameless.validate() else {
+            Issue.record("expected validate() to still fail on the empty name"); return
+        }
+        #expect(invalid.message == "The schedule needs a name.")
+    }
+
+    @Test("curvePreview is nil when the points themselves don't validate")
+    func previewNilOnBadPoints() {
+        #expect(draft(points: [.init(seconds: 0, dutyPercentText: "50")]).curvePreview == nil)
+        #expect(draft(points: [
+            .init(seconds: 0, dutyPercentText: "abc"),
+            .init(seconds: 100, dutyPercentText: "50"),
+        ]).curvePreview == nil)
     }
 
     // MARK: secondsOfDay / date — fixed UTC reference day

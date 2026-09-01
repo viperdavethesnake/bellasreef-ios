@@ -3,18 +3,20 @@
 import BellasReefAPI
 import Foundation
 
-/// `Result`'s failure side requires `Error`; the editor's rules only ever
-/// need a message to show, so a bare `String` is exactly what `validate()`
-/// wants to return. Retroactive because neither `String` nor `Error` is
-/// ours.
-extension String: @retroactive Error {}
-
 /// The editor's working copy of a schedule, and the one place its validation
 /// rules live. `ScheduleEditorView` used to carry these rules itself, in
 /// three places that had quietly drifted into three near-identical
 /// implementations (`validationText`, `draftCurve`, `save`'s request build) —
 /// this type is the single source those three now call through.
 public struct ScheduleDraft: Equatable, Sendable {
+
+    /// `validate()`'s failure side — a message to show, and nothing else.
+    /// The view reads `.message`; there's no reason for it to construct one
+    /// itself, so the synthesized memberwise init (internal, same-module
+    /// only, per Swift's usual rule for public structs) is exactly enough.
+    public struct Invalid: Error, Equatable, Sendable {
+        public let message: String
+    }
 
     /// One row of the draft: a time and a duty text field, kept as text
     /// because the field is mid-edit more often than it holds a legal
@@ -54,19 +56,19 @@ public struct ScheduleDraft: Equatable, Sendable {
     /// success this also does the wire encoding `save()` used to do by
     /// hand: sorted points, `ScheduleCurve.wireTime`, duty as a 0...1
     /// fraction.
-    public func validate() -> Result<Components.Schemas.ScheduleRequest, String> {
+    public func validate() -> Result<Components.Schemas.ScheduleRequest, Invalid> {
         if name.trimmingCharacters(in: .whitespaces).isEmpty {
-            return .failure("The schedule needs a name.")
+            return .failure(Invalid(message: "The schedule needs a name."))
         }
         if points.contains(where: { $0.duty == nil }) {
-            return .failure("Brightness is 0–100%.")
+            return .failure(Invalid(message: "Brightness is 0–100%."))
         }
         let times = points.map(\.seconds)
         if Set(times).count != times.count {
-            return .failure("Two points share a time.")
+            return .failure(Invalid(message: "Two points share a time."))
         }
         if points.count < 2 {
-            return .failure("A curve needs at least two points.")
+            return .failure(Invalid(message: "A curve needs at least two points."))
         }
         let sorted = points.sorted { $0.seconds < $1.seconds }
         let request = Components.Schemas.ScheduleRequest(
@@ -77,6 +79,22 @@ public struct ScheduleDraft: Equatable, Sendable {
             zone: zoneIdentifier
         )
         return .success(request)
+    }
+
+    /// The chart preview's rule: a curve from points alone, ignoring the
+    /// name — the editor has always shown a preview before a name is typed,
+    /// and `validate()` folding every rule into one call must not take that
+    /// away. Built the same way `validate()` parses each point's duty, then
+    /// handed to `ScheduleCurve`'s own initializer for the rest (ascending
+    /// unique times, duty range, a resolvable zone) — no rule text
+    /// duplicated here.
+    public var curvePreview: ScheduleCurve? {
+        let sorted = points.sorted { $0.seconds < $1.seconds }
+        let curvePoints = sorted.compactMap { point -> ScheduleCurve.Point? in
+            point.duty.map { ScheduleCurve.Point(seconds: point.seconds, duty: $0) }
+        }
+        guard curvePoints.count == points.count else { return nil }
+        return ScheduleCurve(points: curvePoints, zoneIdentifier: zoneIdentifier)
     }
 
     /// A fixed UTC reference day — `Date(timeIntervalSinceReferenceDate: 0)`,
