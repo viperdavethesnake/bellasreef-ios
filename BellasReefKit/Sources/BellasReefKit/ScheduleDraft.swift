@@ -52,16 +52,26 @@ public struct ScheduleDraft: Equatable, Sendable {
 
     /// The editor's validation, in the exact order and wording the view
     /// used to check inline — a name, then every duty a legal percentage,
-    /// then no two points at the same time, then at least two points. On
-    /// success this also does the wire encoding `save()` used to do by
-    /// hand: sorted points, `ScheduleCurve.wireTime`, duty as a 0...1
-    /// fraction.
+    /// then every point's time inside one day, then no two points at the
+    /// same time, then at least two points. On success this also does the
+    /// wire encoding `save()` used to do by hand: sorted points,
+    /// `ScheduleCurve.wireTime`, duty as a 0...1 fraction.
+    ///
+    /// The time-range check mirrors `ScheduleCurve.init?`'s own
+    /// `(0..<86_400).contains($0.seconds)` guard: a point at or past
+    /// 86_400 s wire-encodes to `"24:00:00"` or later, which the hub's
+    /// `validate_curve` rejects with a 422. Unreachable from the editor
+    /// today (`addPoint`/`nextFreeTime` never produce such a point), so
+    /// there's no existing UI copy to preserve for it.
     public func validate() -> Result<Components.Schemas.ScheduleRequest, Invalid> {
         if name.trimmingCharacters(in: .whitespaces).isEmpty {
             return .failure(Invalid(message: "The schedule needs a name."))
         }
         if points.contains(where: { $0.duty == nil }) {
             return .failure(Invalid(message: "Brightness is 0–100%."))
+        }
+        if points.contains(where: { !(0..<86_400).contains($0.seconds) }) {
+            return .failure(Invalid(message: "A point's time must be within one day."))
         }
         let times = points.map(\.seconds)
         if Set(times).count != times.count {

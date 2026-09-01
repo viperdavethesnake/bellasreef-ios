@@ -96,27 +96,32 @@ struct ScheduleEditorView: View {
             }
 
             Section {
-                // `.element.id` keeps ForEach's own diffing on the row's
-                // stable UUID (unchanged); `index` is only for the
-                // accessibility identifier below — the ruling was index,
-                // not the fresh-UUID `DraftPoint.id`, for that identifier
-                // specifically.
-                ForEach(Array(draft.enumerated()), id: \.element.id) { index, _ in
+                // `ForEach($draft)` keys on `DraftPoint.id` (a stable UUID)
+                // and hands each row its own element binding — immune to a
+                // stale positional index during a delete's exit animation,
+                // which `ForEach(Array(draft.enumerated()), id: \.element.id)`
+                // plus `$draft[index]` was not (review finding). The
+                // accessibility identifier still needs a position, so it's
+                // derived per row via `firstIndex(where:)` rather than
+                // captured from an enumeration.
+                ForEach($draft) { $point in
                     HStack {
                         DatePicker(
                             "Time",
-                            selection: timeBinding($draft[index]),
+                            selection: timeBinding($point),
                             displayedComponents: .hourAndMinute
                         )
                         .labelsHidden()
                         .environment(\.timeZone, TimeZone.gmt)
                         Spacer()
-                        TextField("%", text: $draft[index].dutyPercentText)
+                        TextField("%", text: $point.dutyPercentText)
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 64)
                             .accessibilityLabel("Brightness percent")
-                            .accessibilityIdentifier("schedule-point-duty-\(index)")
+                            .accessibilityIdentifier(
+                                "schedule-point-duty-\(draft.firstIndex(where: { $0.id == point.id }) ?? 0)"
+                            )
                         Text("%")
                             .font(Theme.caption)
                             .foregroundStyle(Theme.secondaryText)

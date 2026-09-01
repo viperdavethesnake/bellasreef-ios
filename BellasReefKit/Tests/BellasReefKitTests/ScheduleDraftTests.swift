@@ -52,6 +52,27 @@ struct ScheduleDraftTests {
         #expect(invalid2.message == "Brightness is 0–100%.")
     }
 
+    @Test("a point at or past 86_400 s fails — that would wire-encode to an invalid 24:00:00+ time")
+    func pointTimeOutOfRange() {
+        let atMidnightNextDay = draft(points: [
+            .init(seconds: 0, dutyPercentText: "20"),
+            .init(seconds: 86_400, dutyPercentText: "80"),
+        ]).validate()
+        guard case .failure(let invalid) = atMidnightNextDay else {
+            Issue.record("expected failure"); return
+        }
+        #expect(invalid.message == "A point's time must be within one day.")
+
+        let wellPast = draft(points: [
+            .init(seconds: 0, dutyPercentText: "20"),
+            .init(seconds: 90_000, dutyPercentText: "80"),
+        ]).validate()
+        guard case .failure(let invalid2) = wellPast else {
+            Issue.record("expected failure"); return
+        }
+        #expect(invalid2.message == "A point's time must be within one day.")
+    }
+
     @Test("two points at the same time fail, even when both have legal duties")
     func duplicateTimes() {
         let result = draft(points: [
