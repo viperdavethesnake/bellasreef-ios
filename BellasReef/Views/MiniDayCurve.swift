@@ -23,6 +23,17 @@ struct MiniDayCurve: View {
             let width = geo.size.width
             let height = geo.size.height
             let plotted = curve.plotPoints
+
+            // The same sub-8% floor `ScheduleChart` shades
+            // (`Dimming.minUsableDuty`): the hub snaps any duty in this band
+            // to 0 before it reaches the pin, so a point plotted inside it
+            // here — without the shading — would show something that never
+            // actually happens on the wire.
+            Rectangle()
+                .fill(Theme.floorBand)
+                .frame(width: width, height: height * CGFloat(Dimming.minUsableDuty))
+                .position(x: width / 2, y: height - (height * CGFloat(Dimming.minUsableDuty)) / 2)
+
             Path { path in
                 for (index, point) in plotted.enumerated() {
                     let x = width * CGFloat(point.seconds) / 86_400

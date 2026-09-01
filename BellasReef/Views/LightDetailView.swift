@@ -28,6 +28,13 @@ struct LightDetailView: View {
     }
 
     var body: some View {
+        // Bound once (review fold): the computed merge below used to be
+        // evaluated twice per render — once for the content, once for the
+        // navigation title — which is two independent reads of the same
+        // wire-derived snapshot that could in principle disagree between
+        // them. One `let` is what makes "the merge" and "the title" the
+        // same value by construction.
+        let card = card
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 if let card {

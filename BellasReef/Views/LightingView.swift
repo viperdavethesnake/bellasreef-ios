@@ -367,7 +367,7 @@ private struct LightingCardView: View {
                 if let hold = currentHold(now: context.date) {
                     HStack(alignment: .center) {
                         Label(
-                            "Held at \(Dimming.percent(hold.duty))% · \(Self.label(for: hold.transition)) · "
+                            "Held at \(Dimming.percent(hold.duty))% · \(hold.transition.label) · "
                                 + "\(formatRemaining(secondsRemaining(hold, now: context.date)))"
                                 + returnsToText(hold),
                             systemImage: "hand.raised.fill"
@@ -570,7 +570,7 @@ private struct LightingCardView: View {
         parts.append(card.reportedDuty.map { "\(Dimming.percent($0)) percent" } ?? "no state yet")
         if let hold = currentHold() {
             parts.append(
-                "held at \(Dimming.percent(hold.duty)) percent, \(Self.label(for: hold.transition).lowercased()) transition"
+                "held at \(Dimming.percent(hold.duty)) percent, \(hold.transition.label.lowercased()) transition"
             )
         }
         return parts.joined(separator: ", ")
@@ -716,13 +716,6 @@ private struct LightingCardView: View {
         case .oneHour: "1 h"
         case .fourHours: "4 h"
         case .eightHours: "8 h"
-        }
-    }
-
-    private static func label(for transition: HubClient.HoldTransition) -> String {
-        switch transition {
-        case .snap: "Snap"
-        case .ramp: "Ramp"
         }
     }
 }

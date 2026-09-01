@@ -479,6 +479,20 @@ public actor HubClient {
         case snap
         case ramp
 
+        /// "Snap" / "Ramp" — the operator-facing word for this transition.
+        /// Hoisted here (deferred-minors review fold) so it lives in the one
+        /// place next to the type it describes: `LightingView`'s card and
+        /// `TankView`'s Equipment row both render holds off the same wire
+        /// concept and used to carry their own private copy of this switch,
+        /// which is exactly the kind of thing that drifts one small edit at
+        /// a time.
+        public var label: String {
+            switch self {
+            case .snap: "Snap"
+            case .ramp: "Ramp"
+            }
+        }
+
         var payload: Components.Schemas.OverrideRequest.TransitionPayload {
             switch self {
             case .snap: .snap

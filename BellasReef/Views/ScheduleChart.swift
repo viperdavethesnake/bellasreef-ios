@@ -30,7 +30,7 @@ struct ScheduleChart: View {
                 yStart: .value("Brightness", 0),
                 yEnd: .value("Brightness", Dimming.minUsableDuty * 100)
             )
-            .foregroundStyle(Theme.tertiaryText.opacity(0.12))
+            .foregroundStyle(Theme.floorBand)
             ForEach(curve.plotPoints, id: \.seconds) { point in
                 LineMark(
                     x: .value("Hour", Double(point.seconds) / 3600),
