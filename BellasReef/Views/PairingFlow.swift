@@ -60,11 +60,19 @@ struct PairingFlow: View {
                 // VPN. A controller you cannot reach because discovery is fussy
                 // is not much of a controller.
                 Section("By address") {
-                    TextField("bellasreef.local or 192.168.1.20", text: $manualAddress)
+                    // Not "bellasreef.local": the hostname is the operator's
+                    // choice (the first production hub is coco-bellasreef),
+                    // and a placeholder that names a specific one reads as
+                    // the required value rather than an example.
+                    TextField("your-hub.local or 192.168.1.20", text: $manualAddress)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
                         .onSubmit(connectManually)
+                    // Prominent like "Pair this device", so its disabled
+                    // state reads as a greyed button rather than dead text
+                    // (2026-08-31 clean-install review).
                     Button("Connect", action: connectManually)
+                        .buttonStyle(.borderedProminent)
                         .disabled(Hub.manual(manualAddress) == nil)
                 }
             }
