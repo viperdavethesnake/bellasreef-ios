@@ -147,7 +147,7 @@ struct AddDeviceView: View {
             case .malformed: result = .malformed
             }
         } catch {
-            result = .failed("\(error)")
+            result = .failed(HumanError.describe(error))
         }
     }
 }

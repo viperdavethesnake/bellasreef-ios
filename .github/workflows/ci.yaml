@@ -65,3 +65,8 @@ jobs:
         run: |
           diff -q Contracts/openapi.json BellasReefKit/Sources/BellasReefAPI/openapi.json \
             || { echo "::error::Contracts/openapi.json and the generator input have diverged"; exit 1; }
+
+      # Bench-bitten twice: a raw error interpolated straight into a screen.
+      # See scripts/no-raw-errors.sh for what it enforces and why.
+      - name: No raw errors reach a screen
+        run: bash scripts/no-raw-errors.sh

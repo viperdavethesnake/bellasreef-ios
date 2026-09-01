@@ -323,8 +323,14 @@ public final class TankMonitor {
                 if !Task.isCancelled { connection = .disconnected("hub closed the stream") }
             } catch let error as StreamClient.StreamError {
                 if case .undecodableFrame = error {
-                    // Retrying will not help — the contracts differ.
-                    connection = .contractMismatch(error.description)
+                    // Retrying will not help — the contracts differ. Deliberately
+                    // not `HumanError.describe(error)`: `StreamError`'s own
+                    // `.description` already is the short hand-authored sentence
+                    // (HumanError.swift routes this same type through verbatim),
+                    // and `StreamClient.decode`'s payload is now the shortened
+                    // frame-kind phrase — routing it through `describe` a second
+                    // time would erase that detail for nothing.
+                    connection = .contractMismatch(error.description)  // no-raw-error: sanctioned StreamError pass-through
                     return
                 }
                 connection = .disconnected(disconnectedReason(error))

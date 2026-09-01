@@ -764,8 +764,14 @@ public actor HubClient {
     public func pair(clientName: String, setupCode: String? = nil) async throws -> PairingOutcome {
         do {
             try tokens.probe()
+        } catch let storeError as TokenStore.StoreError {
+            throw ClientError.credentialStoreUnusable(storeError.description)
         } catch {
-            throw ClientError.credentialStoreUnusable("\(error)")
+            // Whatever a non-production `CredentialStore` throws (a test
+            // fake, say) is not a sentence anyone authored — keep the case's
+            // "could not store a credential" framing rather than leaking the
+            // raw error text.
+            throw ClientError.credentialStoreUnusable("could not be probed")
         }
 
         let output = try await client.pair(

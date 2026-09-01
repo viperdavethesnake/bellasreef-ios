@@ -189,7 +189,7 @@ final class AppModel {
         do {
             try await client?.signOut()
         } catch {
-            failure = "\(error)"
+            failure = HumanError.describe(error)
         }
         client = nil
         monitor = nil

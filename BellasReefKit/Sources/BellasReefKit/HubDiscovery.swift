@@ -110,7 +110,11 @@ public final class HubDiscovery {
                     // A cancelled NWBrowser cannot be restarted, so recovery is
                     // always cancel-and-recreate.
                     self.isBrowsing = false
-                    self.state = .failed(String(describing: error))
+                    // Never consumed today — `PairingFlow` matches bare
+                    // `case .failed:` — but the gun is unloaded: this payload
+                    // must not carry a raw error dump if a caller ever reads
+                    // it.
+                    self.state = .failed(HumanError.describe(error))
                     log.error("browser failed: \(String(describing: error))")
                     self.scheduleRestart()
                 case .cancelled:
