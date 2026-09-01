@@ -24,6 +24,14 @@ public struct ScheduleCurve: Equatable, Hashable, Sendable {
     public let points: [Point]
     public let zone: TimeZone
 
+    /// `zone` wrapped in a `Calendar`, built once at construction rather
+    /// than per lookup — `secondsOfDay(for:)` is called every chart tick
+    /// (`ScheduleChart.swift`, `LightingView.swift`), and a fresh
+    /// `Calendar(identifier:.gregorian)` on every one of those calls was a
+    /// needless per-tick allocation for a value that never changes once the
+    /// curve exists.
+    private let calendar: Calendar
+
     /// The hub's own `validate_curve` rules, applied at construction: at
     /// least two points, strictly ascending unique times inside one day,
     /// duty within 0...1, and a zone the platform can resolve. A curve that
@@ -36,6 +44,9 @@ public struct ScheduleCurve: Equatable, Hashable, Sendable {
         else { return nil }
         self.points = points
         self.zone = zone
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = zone
+        self.calendar = calendar
     }
 
     public init?(_ schedule: Components.Schemas.ScheduleView) {
@@ -57,8 +68,6 @@ public struct ScheduleCurve: Equatable, Hashable, Sendable {
     /// Seconds since local midnight in the *schedule's* zone — the x-position
     /// of "now" on any drawing of this curve.
     public func secondsOfDay(for instant: Date) -> Int {
-        var calendar = Calendar(identifier: .gregorian)
-        calendar.timeZone = zone
         let comps = calendar.dateComponents([.hour, .minute, .second], from: instant)
         return (comps.hour ?? 0) * 3600 + (comps.minute ?? 0) * 60 + (comps.second ?? 0)
     }
@@ -131,6 +140,14 @@ public struct ScheduleCurve: Equatable, Hashable, Sendable {
         return hour * 3600 + minute * 60 + second
     }
 
+    /// The inverse of `seconds(fromWireTime:)` — for a legal wire time. It is
+    /// **not** the inverse for `86_400`: that value formats as `"24:00:00"`,
+    /// which `seconds(fromWireTime:)` then refuses (hour 24 is out of
+    /// range), so the round trip deliberately fails rather than lying about
+    /// what the hub accepts. `86_400` only ever appears as `plotPoints`'
+    /// synthesized midnight-of-next-day endpoint — a chart x-coordinate, not
+    /// a value any caller sends back to the hub — so this asymmetry is
+    /// intentional and confined to that one caller.
     public static func wireTime(fromSeconds seconds: Int) -> String {
         String(format: "%02d:%02d:%02d", seconds / 3600, seconds % 3600 / 60, seconds % 60)
     }

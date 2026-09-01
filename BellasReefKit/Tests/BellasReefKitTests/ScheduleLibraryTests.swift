@@ -1,5 +1,6 @@
 // Bella's Reef iOS — closed source.
 
+import BellasReefAPI
 import Foundation
 import Testing
 
@@ -107,6 +108,100 @@ struct ScheduleLibraryTests {
             return
         }
         #expect(await calls.count == 0)
+    }
+
+    @Test("create: a refusal does not re-read — the hub's copy did not change")
+    func createRefusalDoesNotRefresh() async throws {
+        let request = Components.Schemas.ScheduleRequest(
+            name: "Reef day",
+            points: [.init(at: "08:00:00", duty: 0.0), .init(at: "20:00:00", duty: 0.6)],
+            zone: "UTC"
+        )
+
+        let nameTakenCalls = CallCounter()
+        let nameTaken = ScheduleLibrary(client: stub { operation in
+            if operation == "listSchedules" {
+                await nameTakenCalls.bump()
+                return (200, json("[]"))
+            }
+            #expect(operation == "createSchedule")
+            return (409, nil)
+        })
+        guard case .nameTaken = try await nameTaken.create(request) else {
+            Issue.record("expected .nameTaken")
+            return
+        }
+        #expect(await nameTakenCalls.count == 0)
+
+        let curveRejectedCalls = CallCounter()
+        let curveRejected = ScheduleLibrary(client: stub { operation in
+            if operation == "listSchedules" {
+                await curveRejectedCalls.bump()
+                return (200, json("[]"))
+            }
+            #expect(operation == "createSchedule")
+            return (422, nil)
+        })
+        guard case .curveRejected = try await curveRejected.create(request) else {
+            Issue.record("expected .curveRejected")
+            return
+        }
+        #expect(await curveRejectedCalls.count == 0)
+    }
+
+    @Test("update: a refusal does not re-read — the hub's copy did not change")
+    func updateRefusalDoesNotRefresh() async throws {
+        let request = Components.Schemas.ScheduleRequest(
+            name: "Reef day",
+            points: [.init(at: "08:00:00", duty: 0.0), .init(at: "20:00:00", duty: 0.6)],
+            zone: "UTC"
+        )
+        let id = "6f1e4e2a-1111-4222-8333-444455556666"
+
+        let nameTakenCalls = CallCounter()
+        let nameTaken = ScheduleLibrary(client: stub { operation in
+            if operation == "listSchedules" {
+                await nameTakenCalls.bump()
+                return (200, json("[]"))
+            }
+            #expect(operation == "updateSchedule")
+            return (409, nil)
+        })
+        guard case .nameTaken = try await nameTaken.update(id: id, request) else {
+            Issue.record("expected .nameTaken")
+            return
+        }
+        #expect(await nameTakenCalls.count == 0)
+
+        let curveRejectedCalls = CallCounter()
+        let curveRejected = ScheduleLibrary(client: stub { operation in
+            if operation == "listSchedules" {
+                await curveRejectedCalls.bump()
+                return (200, json("[]"))
+            }
+            #expect(operation == "updateSchedule")
+            return (422, nil)
+        })
+        guard case .curveRejected = try await curveRejected.update(id: id, request) else {
+            Issue.record("expected .curveRejected")
+            return
+        }
+        #expect(await curveRejectedCalls.count == 0)
+
+        let unknownCalls = CallCounter()
+        let unknown = ScheduleLibrary(client: stub { operation in
+            if operation == "listSchedules" {
+                await unknownCalls.bump()
+                return (200, json("[]"))
+            }
+            #expect(operation == "updateSchedule")
+            return (404, nil)
+        })
+        guard case .unknownSchedule = try await unknown.update(id: id, request) else {
+            Issue.record("expected .unknownSchedule")
+            return
+        }
+        #expect(await unknownCalls.count == 0)
     }
 
     @Test("unassign: a 404 (nothing assigned) re-reads too — a stuck checkmark self-heals")
