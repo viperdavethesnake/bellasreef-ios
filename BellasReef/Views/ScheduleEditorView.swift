@@ -25,12 +25,6 @@ struct ScheduleEditorView: View {
         let id = UUID()
         var seconds: Int
         var dutyPercentText: String
-
-        var duty: Double? {
-            guard let percent = Double(dutyPercentText), (0...100).contains(percent)
-            else { return nil }
-            return percent / 100
-        }
     }
 
     @State private var name: String
@@ -62,27 +56,33 @@ struct ScheduleEditorView: View {
         _draft = State(initialValue: points)
     }
 
-    /// The draft as a curve, when it validates — drives both the preview and
-    /// the Save button.
-    private var draftCurve: ScheduleCurve? {
-        let sorted = draft.sorted { $0.seconds < $1.seconds }
-        let points = sorted.compactMap { point -> ScheduleCurve.Point? in
-            point.duty.map { ScheduleCurve.Point(seconds: point.seconds, duty: $0) }
-        }
-        guard points.count == draft.count else { return nil }
-        return ScheduleCurve(
-            points: points,
+    /// The view's `draft` in Kit's terms — the one thing `draftCurve`,
+    /// `validationText` and `save()` all build from, so the rules those three
+    /// used to reimplement separately now live in exactly one place
+    /// (`ScheduleDraft.validate()`).
+    private var scheduleDraft: ScheduleDraft {
+        ScheduleDraft(
+            name: name,
+            points: draft.map { ScheduleDraft.DraftPoint(seconds: $0.seconds, dutyPercentText: $0.dutyPercentText) },
             zoneIdentifier: schedule?.zone ?? TimeZone.current.identifier
         )
     }
 
+    /// The draft as a curve, when it validates — drives both the preview and
+    /// the Save button. Goes through the validated wire request rather than
+    /// `draft` directly, so this is provably the same curve `save()` would
+    /// send.
+    private var draftCurve: ScheduleCurve? {
+        guard case .success(let request) = scheduleDraft.validate() else { return nil }
+        let points = request.points.compactMap { point -> ScheduleCurve.Point? in
+            ScheduleCurve.seconds(fromWireTime: point.at).map { ScheduleCurve.Point(seconds: $0, duty: point.duty) }
+        }
+        return ScheduleCurve(points: points, zoneIdentifier: request.zone ?? TimeZone.current.identifier)
+    }
+
     private var validationText: String? {
-        if name.trimmingCharacters(in: .whitespaces).isEmpty { return "The schedule needs a name." }
-        if draft.contains(where: { $0.duty == nil }) { return "Brightness is 0–100%." }
-        let times = draft.map(\.seconds)
-        if Set(times).count != times.count { return "Two points share a time." }
-        if draft.count < 2 { return "A curve needs at least two points." }
-        return nil
+        guard case .failure(let message) = scheduleDraft.validate() else { return nil }
+        return message
     }
 
     var body: some View {
@@ -101,21 +101,27 @@ struct ScheduleEditorView: View {
             }
 
             Section {
-                ForEach($draft) { $point in
+                // `.element.id` keeps ForEach's own diffing on the row's
+                // stable UUID (unchanged); `index` is only for the
+                // accessibility identifier below — the ruling was index,
+                // not the fresh-UUID `DraftPoint.id`, for that identifier
+                // specifically.
+                ForEach(Array(draft.enumerated()), id: \.element.id) { index, _ in
                     HStack {
                         DatePicker(
                             "Time",
-                            selection: timeBinding($point),
+                            selection: timeBinding($draft[index]),
                             displayedComponents: .hourAndMinute
                         )
                         .labelsHidden()
+                        .environment(\.timeZone, TimeZone.gmt)
                         Spacer()
-                        TextField("%", text: $point.dutyPercentText)
+                        TextField("%", text: $draft[index].dutyPercentText)
                             .keyboardType(.numberPad)
                             .multilineTextAlignment(.trailing)
                             .frame(width: 64)
                             .accessibilityLabel("Brightness percent")
-                            .accessibilityIdentifier("schedule-point-duty")
+                            .accessibilityIdentifier("schedule-point-duty-\(index)")
                         Text("%")
                             .font(Theme.caption)
                             .foregroundStyle(Theme.secondaryText)
@@ -129,6 +135,7 @@ struct ScheduleEditorView: View {
                 } label: {
                     Label("Add point", systemImage: "plus")
                 }
+                .disabled(scheduleDraft.nextFreeTime() == nil)
             } header: {
                 Text("Points")
             } footer: {
@@ -187,45 +194,32 @@ struct ScheduleEditorView: View {
     }
 
     /// DatePicker wants a Date; the draft keeps seconds-of-day. Anchored to
-    /// today in the device zone — only the hour and minute survive the trip
-    /// back, and the wire second is always :00.
+    /// the fixed UTC reference day in GMT (`ScheduleDraft.secondsOfDay(from:)`
+    /// / `date(secondsOfDay:)`), which the `DatePicker`'s own
+    /// `.environment(\.timeZone, TimeZone.gmt)` agrees with — only the hour
+    /// and minute survive the trip back, and the wire second is always :00.
     private func timeBinding(_ point: Binding<DraftPoint>) -> Binding<Date> {
         Binding(
-            get: {
-                Calendar.current.date(
-                    bySettingHour: point.wrappedValue.seconds / 3600,
-                    minute: point.wrappedValue.seconds % 3600 / 60,
-                    second: 0, of: Calendar.current.startOfDay(for: Date())
-                ) ?? Date()
-            },
-            set: { date in
-                let comps = Calendar.current.dateComponents([.hour, .minute], from: date)
-                point.wrappedValue.seconds = (comps.hour ?? 0) * 3600 + (comps.minute ?? 0) * 60
-            }
+            get: { ScheduleDraft.date(secondsOfDay: point.wrappedValue.seconds) },
+            set: { date in point.wrappedValue.seconds = ScheduleDraft.secondsOfDay(from: date) }
         )
     }
 
-    /// A new point lands an hour after the latest, wrapping before midnight
-    /// — a deterministic spot the operator immediately re-picks anyway.
+    /// A new point lands an hour after the latest, wrapping before midnight —
+    /// `ScheduleDraft.nextFreeTime()`'s rule, which also finds a free minute
+    /// if that spot is already taken. The Add control is disabled when it
+    /// returns `nil`, so this is only ever called with a real value.
     private func addPoint() {
-        let latest = draft.map(\.seconds).max() ?? 0
-        let seconds = min(latest + 3600, 86_340)
+        guard let seconds = scheduleDraft.nextFreeTime() else { return }
         draft.append(DraftPoint(seconds: seconds, dutyPercentText: "0"))
     }
 
     private func save() async {
         guard let library = model.library else { return }
+        guard case .success(let request) = scheduleDraft.validate() else { return }
         submitting = true
         defer { submitting = false }
         problem = nil
-        let sorted = draft.sorted { $0.seconds < $1.seconds }
-        let request = Components.Schemas.ScheduleRequest(
-            name: name.trimmingCharacters(in: .whitespaces),
-            points: sorted.map {
-                .init(at: ScheduleCurve.wireTime(fromSeconds: $0.seconds), duty: $0.duty ?? 0)
-            },
-            zone: schedule?.zone ?? TimeZone.current.identifier
-        )
         do {
             let outcome: HubClient.ScheduleSaveOutcome
             if let schedule {
