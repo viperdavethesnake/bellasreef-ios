@@ -167,6 +167,14 @@ public enum Theme {
     public static let sectionTitle = Font.system(.headline, design: .rounded)
     public static let value = Font.system(.body, design: .rounded).monospacedDigit()
     public static let caption = Font.system(.caption, design: .rounded)
+
+    // MARK: Chart
+
+    /// The sub-8% floor shading `MiniDayCurve` and `ScheduleChart` both draw
+    /// under a duty curve (`Dimming.minUsableDuty`) — hoisted here (deferred-
+    /// minors review fold) so the tint and opacity can never drift apart
+    /// between the two charts the way two independently-typed literals can.
+    public static let floorBand = tertiaryText.opacity(0.12)
 }
 
 /// How a tank is doing, in the only three states worth a colour.

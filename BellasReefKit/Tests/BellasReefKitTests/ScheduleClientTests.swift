@@ -12,6 +12,15 @@ private let anyHub = Hub(
 
 private func json(_ text: String) -> Data { Data(text.utf8) }
 
+/// Matches `CredentialRejectionTests`' idiom rather than inventing a second
+/// one: a flag the rejection handler can set from any context.
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var raised = false
+    func raise() { lock.withLock { raised = true } }
+    var isRaised: Bool { lock.withLock { raised } }
+}
+
 private func stub(_ handler: @escaping @Sendable (String) async throws -> (Int, Data?)) -> HubClient {
     HubClient(
         hub: anyHub, tokens: MemoryCredentials(token: "refresh"),
@@ -47,6 +56,41 @@ struct ScheduleClientTests {
         #expect(schedules[0].points.count == 3)
         #expect(schedules[0].points[0].at == "08:00:00")
         #expect(schedules[0].assignedChannels == ["pi-pwm-0"])
+    }
+
+    /// Mirrors `CredentialRejectionTests.staleAccessTokenStaysQuiet`: a 401
+    /// on this data call is a stale access token, not proof the device is
+    /// revoked — only `mintToken` itself rejecting the refresh token is
+    /// that proof, and only that path may fire the handler.
+    @Test("a 401 throws without treating it as a revocation")
+    func unauthorized() async throws {
+        let client = stub { operation in
+            #expect(operation == "listSchedules")
+            return (401, nil)
+        }
+        let flag = Flag()
+        await client.notifyCredentialRejected { flag.raise() }
+
+        await #expect(throws: HubClient.ClientError.self) {
+            _ = try await client.schedules()
+        }
+        #expect(!flag.isRaised, "a stale access token is not a revocation")
+    }
+
+    @Test("an undocumented status names the operation and the status code")
+    func undocumentedStatus() async throws {
+        let client = stub { operation in
+            #expect(operation == "listSchedules")
+            return (500, nil)
+        }
+        do {
+            _ = try await client.schedules()
+            Issue.record("expected a thrown error")
+        } catch let error as HubClient.ClientError {
+            #expect(error.description == "schedules returned 500")
+        } catch {
+            Issue.record("expected HubClient.ClientError, got \(error)")
+        }
     }
 
     @Test("create: 200 carries the created schedule; 409 is a name collision, not an error")

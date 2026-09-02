@@ -479,6 +479,20 @@ public actor HubClient {
         case snap
         case ramp
 
+        /// "Snap" / "Ramp" — the operator-facing word for this transition.
+        /// Hoisted here (deferred-minors review fold) so it lives in the one
+        /// place next to the type it describes: `LightingView`'s card and
+        /// `TankView`'s Equipment row both render holds off the same wire
+        /// concept and used to carry their own private copy of this switch,
+        /// which is exactly the kind of thing that drifts one small edit at
+        /// a time.
+        public var label: String {
+            switch self {
+            case .snap: "Snap"
+            case .ramp: "Ramp"
+            }
+        }
+
         var payload: Components.Schemas.OverrideRequest.TransitionPayload {
             switch self {
             case .snap: .snap
@@ -750,8 +764,14 @@ public actor HubClient {
     public func pair(clientName: String, setupCode: String? = nil) async throws -> PairingOutcome {
         do {
             try tokens.probe()
+        } catch let storeError as TokenStore.StoreError {
+            throw ClientError.credentialStoreUnusable(storeError.description)
         } catch {
-            throw ClientError.credentialStoreUnusable("\(error)")
+            // Whatever a non-production `CredentialStore` throws (a test
+            // fake, say) is not a sentence anyone authored — keep the case's
+            // "could not store a credential" framing rather than leaking the
+            // raw error text.
+            throw ClientError.credentialStoreUnusable("could not be probed")
         }
 
         let output = try await client.pair(

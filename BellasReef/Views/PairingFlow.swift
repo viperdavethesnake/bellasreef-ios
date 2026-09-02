@@ -431,7 +431,8 @@ struct HubIdentifyCard: View {
                 problem = "unexpected pairing response"
             }
         } catch {
-            problem = "\(error)"
+            log.error("pair failed: \(String(describing: error))")
+            problem = HumanError.describe(error, host: hub.baseURL.host)
         }
     }
 
@@ -446,8 +447,10 @@ struct HubIdentifyCard: View {
         do {
             try await client.store(refreshToken: refreshToken)
         } catch {
+            let detail = (error as? TokenStore.StoreError)?.description ?? HumanError.describe(error)
+            log.error("credential store failed: \(String(describing: error))")
             problem = "The hub issued a credential and this device could not store it: "
-                + "\(error). The credential is gone; run `bellasreef pair` on the hub to "
+                + "\(detail). The credential is gone; run `bellasreef pair` on the hub to "
                 + "open another window."
             // Off the waiting screen, so the sentence above is readable and the
             // spinner does not imply something is still in progress. Nothing is.
@@ -575,7 +578,8 @@ struct PendingApproval: View {
                     // Keep polling. The request is alive on the hub whether or
                     // not this device can reach it right now, and the countdown
                     // below is what ends the wait if it never can.
-                    glitch = "\(error)"
+                    log.error("poll failed: \(String(describing: error))")
+                    glitch = HumanError.describe(error, host: await client.hub.baseURL.host)
                 }
                 try? await Task.sleep(for: .seconds(cadence))
             }

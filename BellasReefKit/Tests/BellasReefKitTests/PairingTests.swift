@@ -231,6 +231,43 @@ struct PairingTests {
         #expect(await log.isEmpty, "the request reached the hub despite an unusable Keychain")
     }
 
+    @Test("a Keychain StoreError keeps its own sentence, not a raw interpolation")
+    func keychainPreflightKeepsStoreErrorSentence() async {
+        let underlying = TokenStore.StoreError.keychain(errSecMissingEntitlement)
+        let transport = StubTransport { _, _, _ in (200, json(#"{"refresh_token":"rt","client_id":"c"}"#)) }
+        let client = HubClient(
+            hub: anyHub, tokens: MemoryCredentials(probeError: underlying), transport: transport
+        )
+
+        do {
+            _ = try await client.pair(clientName: "iPad")
+            Issue.record("expected the pre-flight to throw")
+        } catch HubClient.ClientError.credentialStoreUnusable(let detail) {
+            #expect(detail == underlying.description)
+        } catch {
+            Issue.record("expected .credentialStoreUnusable, got \(error)")
+        }
+    }
+
+    @Test("a probe failure that is not a StoreError gets the generic phrase, not its raw dump")
+    func keychainPreflightGenericFailureIsGeneric() async {
+        struct OpaqueProbeFailure: Error {}
+        let transport = StubTransport { _, _, _ in (200, json(#"{"refresh_token":"rt","client_id":"c"}"#)) }
+        let client = HubClient(
+            hub: anyHub, tokens: MemoryCredentials(probeError: OpaqueProbeFailure()), transport: transport
+        )
+
+        do {
+            _ = try await client.pair(clientName: "iPad")
+            Issue.record("expected the pre-flight to throw")
+        } catch HubClient.ClientError.credentialStoreUnusable(let detail) {
+            #expect(detail == "could not be probed")
+            #expect(!detail.contains("OpaqueProbeFailure"))
+        } catch {
+            Issue.record("expected .credentialStoreUnusable, got \(error)")
+        }
+    }
+
     // MARK: Poll
 
     @Test(

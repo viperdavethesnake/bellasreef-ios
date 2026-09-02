@@ -154,4 +154,49 @@ struct FrameDecodingTests {
             _ = try client.decode(drifted)
         }
     }
+
+    @Test("an undecodable frame's payload is a human phrase, not a decoder dump")
+    func undecodableFramePayloadIsHumanReadable() {
+        // Same fixture as `undecodableSensorFrame`: `payload` present but
+        // missing its required `sensor_id`. The Tank status pill and its
+        // VoiceOver label render this string directly via `.contractMismatch`
+        // (see `TankMonitor.run()`), so it must never carry a `DecodingError`
+        // dump.
+        let drifted = """
+        {"frame_version":1,"received_at":"2026-08-10T06:25:22.368219Z","kind":"sensor",\
+        "subject":"bellasreef.sensor.temp.x","payload":{"schema_version":2,\
+        "message_id":"e9889b54-c16e-4630-9267-b866ecdccf37",\
+        "emitted_at":"2026-08-10T06:25:22.367842Z","source":"hardware-io",\
+        "probe_id":"renamed","sensor_type":"temp","value":23.8,"unit":"degC",\
+        "quality":"ok","calibration_id":null}}
+        """
+        do {
+            _ = try client.decode(drifted)
+            Issue.record("expected the drifted frame to fail to decode")
+        } catch StreamClient.StreamError.undecodableFrame(let detail) {
+            #expect(detail.contains("sensor"))
+            #expect(!detail.contains("DecodingError"))
+            #expect(!detail.contains("codingPath"))
+            #expect(!detail.contains("CodingKeys"))
+        } catch {
+            Issue.record("expected .undecodableFrame, got \(error)")
+        }
+    }
+
+    @Test("a frame with no 'kind' field gets a phrase too, not a decoder dump")
+    func undecodableFrameMissingKindIsHumanReadable() {
+        let noKind = """
+        {"frame_version":1,"received_at":"2026-08-10T06:25:20.454993Z"}
+        """
+        do {
+            _ = try client.decode(noKind)
+            Issue.record("expected decode to fail without a 'kind' field")
+        } catch StreamClient.StreamError.undecodableFrame(let detail) {
+            #expect(!detail.contains("DecodingError"))
+            #expect(!detail.contains("codingPath"))
+            #expect(!detail.contains("CodingKeys"))
+        } catch {
+            Issue.record("expected .undecodableFrame, got \(error)")
+        }
+    }
 }

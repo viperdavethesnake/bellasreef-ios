@@ -64,6 +64,15 @@ public enum HumanError {
         if let hubError = error as? HubClient.ClientError {
             return hubError.description
         }
+        // `StreamClient.StreamError`'s cases are the same idiom as
+        // `HubClient.ClientError`'s — a short, hand-authored sentence, not a
+        // transport dump — so it gets the same direct pass-through rather
+        // than falling to `localizedDescription` below, where Swift's
+        // default `Error`-to-`NSError` bridge would replace it with the
+        // generic "The operation couldn't be completed..." text.
+        if let streamError = error as? StreamClient.StreamError {
+            return streamError.description
+        }
         if let url = error as? URLError {
             switch url.code {
             case .cannotConnectToHost:

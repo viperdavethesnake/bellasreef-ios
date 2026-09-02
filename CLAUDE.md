@@ -47,3 +47,6 @@ ones — `bellasreef revoke --list` on the hub is what shows live clients.
 - Deferred-minors backlog lives in Claude's project memory
   (`ios-schedules-deferred-minors`, `ios-adopt-sheet-findings`) — check it
   when touching the schedules editor, curve views, or the adopt sheet.
+- Errors reach a screen only via `HumanError.describe`; a raw error goes to a
+  `log.` line, never into user-visible text. CI enforces it
+  (`scripts/no-raw-errors.sh`).

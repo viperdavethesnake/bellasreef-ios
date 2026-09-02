@@ -237,20 +237,10 @@ struct AlertBanner: View {
             return "Not reporting for \(RelativeAge.describe(from: since))"
         }
 
-        guard let value = alert.value, let threshold = alert.threshold,
-              let alertUnit = alert.unit
-        else {
-            return "Out of range"
-        }
-        guard alertUnit == "degC" else {
-            return "\(value) \(alertUnit) — \(alert.isHigh ? "above" : "below") "
-                + "\(threshold) \(alertUnit)"
-        }
-        let reading = TemperatureDisplay.value(celsius: value, as: unit)
-        let limit = TemperatureDisplay.value(celsius: threshold, as: unit)
-        let symbol = TemperatureDisplay.symbol(for: unit)
-        return "\(reading)\(symbol) — \(alert.isHigh ? "above" : "below") "
-            + "\(limit)\(symbol) \(alert.isHigh ? "max" : "min")"
+        return AlertPhrase.headline(
+            name: name, value: alert.value, threshold: alert.threshold, unit: alert.unit,
+            isHigh: alert.isHigh, temperatureUnit: unit
+        )
     }
 
     /// Violet and a broken-antenna glyph for silence: this is a statement about
@@ -684,53 +674,78 @@ struct ChannelRow: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            HStack {
-                Text(name).foregroundStyle(Theme.primaryText)
-                Spacer()
-                Text("\(Dimming.percent(duty))%")
-                    .font(Theme.value)
-                    .foregroundStyle(Theme.secondaryText)
-            }
+        // A hold's remaining time is derived live from `expires_at` against
+        // this tick's `context.date`, never from `expires_in_s` — that field
+        // is a snapshot taken when the frame was built, and it freezes if
+        // the stream goes quiet mid-hold (`LightingCards.swift` warns
+        // against exactly this trap for the Lighting tab's own countdown;
+        // this row had the bug the warning was about).
+        TimelineView(.periodic(from: .now, by: 5)) { context in
+            VStack(alignment: .leading, spacing: 6) {
+                HStack {
+                    Text(name).foregroundStyle(Theme.primaryText)
+                    Spacer()
+                    Text("\(Dimming.percent(duty))%")
+                        .font(Theme.value)
+                        .foregroundStyle(Theme.secondaryText)
+                }
 
-            GeometryReader { geo in
-                ZStack(alignment: .leading) {
-                    Capsule().fill(Theme.surfaceRaised)
-                    Capsule()
-                        .fill(frame.payload.latched == true ? Theme.safety : Theme.accent)
-                        .frame(width: max(2, geo.size.width * duty))
+                GeometryReader { geo in
+                    ZStack(alignment: .leading) {
+                        Capsule().fill(Theme.surfaceRaised)
+                        Capsule()
+                            .fill(frame.payload.latched == true ? Theme.safety : Theme.accent)
+                            .frame(width: max(2, geo.size.width * duty))
+                    }
+                }
+                .frame(height: 8)
+                // The bar animates at the engine's slew rate rather than
+                // jumping (§7.3); Reduce Motion swaps it for an instant
+                // change.
+                .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: duty)
+
+                if let override = frame.override {
+                    // Same wording as LightingView's own hold row — "Held at
+                    // 15% · Snap · 12 min left" — so the two surfaces read as
+                    // one fact rather than two slightly different tellings
+                    // of it (review fold).
+                    Label(
+                        "Held at \(Dimming.percent(override.duty))% · "
+                            + "\(HubClient.HoldTransition(override.transition).label) · "
+                            + formatRemaining(Self.secondsRemaining(override, now: context.date)),
+                        systemImage: "hand.raised.fill"
+                    )
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.attention)
+                }
+
+                if frame.payload.latched == true {
+                    Label("Interlock latched", systemImage: "exclamationmark.octagon.fill")
+                        .font(Theme.caption)
+                        .foregroundStyle(Theme.safety)
                 }
             }
-            .frame(height: 8)
-            // The bar animates at the engine's slew rate rather than jumping
-            // (§7.3); Reduce Motion swaps it for an instant change.
-            .animation(reduceMotion ? nil : .easeInOut(duration: 0.4), value: duty)
-
-            if let override = frame.override {
-                Label(
-                    "Held at \(Dimming.percent(override.duty))% · \(formatRemaining(override.expiresInS))",
-                    systemImage: "hand.raised.fill"
-                )
-                .font(Theme.caption)
-                .foregroundStyle(Theme.attention)
-            }
-
-            if frame.payload.latched == true {
-                Label("Interlock latched", systemImage: "exclamationmark.octagon.fill")
-                    .font(Theme.caption)
-                    .foregroundStyle(Theme.safety)
-            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(Self.spoken(name: name, duty: duty, frame: frame, now: context.date))
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel(Self.spoken(name: name, duty: duty, frame: frame))
+    }
+
+    private static func secondsRemaining(
+        _ override: Components.Schemas.OverrideContext, now: Date
+    ) -> Double {
+        max(0, override.expiresAt.timeIntervalSince(now))
     }
 
     private static func spoken(
-        name: String, duty: Double, frame: Components.Schemas.StateFrame
+        name: String, duty: Double, frame: Components.Schemas.StateFrame, now: Date
     ) -> String {
         var parts = ["\(name), \(Dimming.percent(duty)) percent"]
         if let override = frame.override {
-            parts.append("held at \(Dimming.percent(override.duty)) percent")
+            parts.append(
+                "held at \(Dimming.percent(override.duty)) percent, "
+                    + "\(HubClient.HoldTransition(override.transition).label.lowercased()) transition, "
+                    + formatRemaining(Self.secondsRemaining(override, now: now))
+            )
         }
         if frame.payload.latched == true { parts.append("interlock latched") }
         return parts.joined(separator: ", ")

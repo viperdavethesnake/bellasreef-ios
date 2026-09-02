@@ -7,6 +7,27 @@ import OSLog
 
 private let log = Logger(subsystem: "com.bellasreef.app", category: "tank")
 
+/// The line `run()`'s catch blocks give `.disconnected` — one seam shared by
+/// every branch, so a stream failure, a `HubClient.ClientError`, and
+/// anything else `client.accessTokenNow()`/`stream.frames(...)` can throw
+/// all get the same treatment: the raw error to the log, one sentence to
+/// the status line, never the other way around.
+///
+/// Bench finding, 2026-09-01: David stopped the hub's `api` container and
+/// the Tank banner rendered `OpenAPIRuntime.ClientError`'s own
+/// `errorDescription` verbatim — "Client encountered an error invoking the
+/// operation "mintToken"... Code=-1004 ..." — because each catch branch
+/// built `.disconnected(...)` from `error.description`/
+/// `.localizedDescription` directly, bypassing `HumanError.describe`
+/// (`HumanError.swift`: "Raw errors go to the log; people get a sentence").
+/// File-scope rather than a method so it is reachable from a test with no
+/// `TankMonitor` instance in play — `statusLine`/`connectionLine` both just
+/// wrap whatever this returns in `"Disconnected — \(why)"`.
+func disconnectedReason(_ error: any Error) -> String {
+    log.error("stream disconnected: \(String(describing: error))")
+    return HumanError.describe(error)
+}
+
 /// Live tank state, assembled from the stream.
 ///
 /// Owns reconnection, because the transport deliberately does not: `frames`
@@ -302,19 +323,25 @@ public final class TankMonitor {
                 if !Task.isCancelled { connection = .disconnected("hub closed the stream") }
             } catch let error as StreamClient.StreamError {
                 if case .undecodableFrame = error {
-                    // Retrying will not help — the contracts differ.
-                    connection = .contractMismatch(error.description)
+                    // Retrying will not help — the contracts differ. Deliberately
+                    // not `HumanError.describe(error)`: `StreamError`'s own
+                    // `.description` already is the short hand-authored sentence
+                    // (HumanError.swift routes this same type through verbatim),
+                    // and `StreamClient.decode`'s payload is now the shortened
+                    // frame-kind phrase — routing it through `describe` a second
+                    // time would erase that detail for nothing.
+                    connection = .contractMismatch(error.description)  // no-raw-error: sanctioned StreamError pass-through
                     return
                 }
-                connection = .disconnected(error.description)
+                connection = .disconnected(disconnectedReason(error))
             } catch let error as HubClient.ClientError {
-                connection = .disconnected(error.description)
+                connection = .disconnected(disconnectedReason(error))
                 if case .unauthorized = error {
                     onCredentialRejected?()
                     return
                 }
             } catch {
-                connection = .disconnected(error.localizedDescription)
+                connection = .disconnected(disconnectedReason(error))
                 if HubRediscovery.isUnreachable(error) {
                     await onUnreachable?()
                 }

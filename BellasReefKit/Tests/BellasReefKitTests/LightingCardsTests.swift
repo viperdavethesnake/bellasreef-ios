@@ -301,3 +301,16 @@ struct EffectiveHoldTests {
         #expect(effectiveHold(frameHold: nil, optimisticHold: nil, releasedIDs: [], now: Self.now) == nil)
     }
 }
+
+/// Deferred-minors Task 3: the operator-facing transition word used to be a
+/// private `static func` duplicated in both `LightingView` and `TankView` —
+/// exactly the kind of thing that drifts one small edit at a time. Hoisted
+/// onto `HoldTransition` itself, next to the type both views already read.
+@Suite("Hold transition label")
+struct HoldTransitionLabelTests {
+    @Test("snap and ramp read as their capitalised operator-facing words")
+    func labels() {
+        #expect(HubClient.HoldTransition.snap.label == "Snap")
+        #expect(HubClient.HoldTransition.ramp.label == "Ramp")
+    }
+}

@@ -2,6 +2,9 @@
 
 import BellasReefAPI
 import Foundation
+import OSLog
+
+private let log = Logger(subsystem: "com.bellasreef.app", category: "stream")
 
 /// A frame from `/api/v1/stream`.
 ///
@@ -126,7 +129,11 @@ public actor StreamClient {
         do {
             kind = try decoder.decode(Kind.self, from: data).kind
         } catch {
-            throw StreamError.undecodableFrame("no kind field: \(error)")
+            // The full decoder dump is for the log; the payload that reaches
+            // the Tank status pill (via `.contractMismatch`, see
+            // `TankMonitor.run()`) must stay one short phrase.
+            log.error("frame missing 'kind' field: \(String(describing: error))")
+            throw StreamError.undecodableFrame("frame missing a 'kind' field")
         }
 
         do {
@@ -157,7 +164,34 @@ public actor StreamClient {
         } catch let error as StreamError {
             throw error
         } catch {
-            throw StreamError.undecodableFrame("\(kind): \(error)")
+            log.error("frame '\(kind)' failed to decode: \(String(describing: error))")
+            throw StreamError.undecodableFrame(Self.humanDecodingPhrase(kind: kind, error: error))
+        }
+    }
+
+    /// The frame `kind` and, where the failure names one, the field that was
+    /// missing or wrong — never the decoder's own dump. That dump (coding
+    /// paths, `CodingKeys`, `Debug description`) is exactly the shape
+    /// `HumanError` exists to keep off a screen, and `.contractMismatch`
+    /// renders this string directly rather than through `HumanError.describe`
+    /// (which would erase the one useful detail: which field drifted).
+    private static func humanDecodingPhrase(kind: String, error: any Error) -> String {
+        guard let decodingError = error as? DecodingError else {
+            return "frame '\(kind)' could not be decoded"
+        }
+        switch decodingError {
+        case let .keyNotFound(key, _):
+            return "frame '\(kind)' missing '\(key.stringValue)'"
+        case let .valueNotFound(_, context):
+            let field = context.codingPath.last?.stringValue ?? "a field"
+            return "frame '\(kind)' missing '\(field)'"
+        case let .typeMismatch(_, context):
+            let field = context.codingPath.last?.stringValue ?? "a field"
+            return "frame '\(kind)' has the wrong type for '\(field)'"
+        case .dataCorrupted:
+            return "frame '\(kind)' is malformed"
+        @unknown default:
+            return "frame '\(kind)' could not be decoded"
         }
     }
 }
