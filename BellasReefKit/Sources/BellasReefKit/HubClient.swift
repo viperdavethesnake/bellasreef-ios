@@ -161,6 +161,10 @@ public actor HubClient {
             configuration: Configuration(dateTranscoder: FractionalSecondsDateTranscoder()),
             transport: transport,
             middlewares: [
+                // Outermost, so it observes the response BearerAuth finally
+                // returns rather than a 401 it is about to retry. Inert
+                // unless a call installs a sink — see `ResponseDispositionSink`.
+                ContentDispositionMiddleware(),
                 BearerAuthMiddleware(
                     token: { try await provider.token() },
                     freshToken: { try await provider.freshToken() }
@@ -740,6 +744,103 @@ public actor HubClient {
         case let .undocumented(statusCode, _):
             throw ClientError.unexpected("history returned \(statusCode)")
         }
+    }
+
+    /// How much of an export this device will hold in memory.
+    ///
+    /// The hub caps the window at 31 days; the app's widest range is 7 days,
+    /// which at the 5 s sensor cadence is about 120 000 rows — some 7 MB of
+    /// CSV. 32 MB leaves room for a faster cadence and still refuses, with a
+    /// sentence, rather than being killed for memory while the operator
+    /// watches a spinner.
+    private static let exportByteCap = 32 * 1024 * 1024
+
+    /// One device's whole record for a window, as a file
+    /// (`GET /api/v1/history/export`).
+    ///
+    /// The counterpart to `history(from:to:buckets:)`: that one downsamples
+    /// so a phone can draw a week, this one hides nothing so the file is
+    /// still worth having weeks later with no hub in the loop.
+    ///
+    /// The generated 200 body is a two-case enum, because the operation
+    /// declares two content types: `.csv(HTTPBody)` — bytes, streamed, which
+    /// is what the hub's `StreamingResponse` sends — and
+    /// `.json(HistoryExport)`, a decoded model. Which one arrives is decided
+    /// by the `format` query parameter, not by content negotiation, so the
+    /// two cases are matched to the two formats and a mismatch is a bug
+    /// rather than something to accommodate.
+    ///
+    /// The JSON leg therefore re-serialises the decoded model rather than
+    /// passing bytes through: the generator gives back a value, not the
+    /// response body. Nothing is lost doing it — `HistoryExport` is
+    /// `additionalProperties: false`, so there is no field the generated type
+    /// could drop — and the round trip means a hub sending something the
+    /// contract does not describe fails here instead of writing a file that
+    /// looks fine. The dates re-encode through the same transcoder the rest
+    /// of this client uses, so the file's timestamps read like every other
+    /// timestamp the hub emits.
+    public func exportHistory(
+        deviceId: String, from start: Date, to end: Date, format: ExportFormat
+    ) async throws -> ExportedFile {
+        // The hub's own name for the file, if it sent one. See
+        // `ResponseDispositionSink` for why this is not simply read off the
+        // response.
+        let sink = ResponseDispositionSink()
+        let output = try await ResponseDispositionSink.$active.withValue(sink) {
+            try await client.historyExport(
+                query: .init(deviceId: deviceId, start: start, end: end, format: format.wire)
+            )
+        }
+
+        switch output {
+        case let .ok(response):
+            let data: Data
+            switch response.body {
+            case let .csv(body):
+                // Left to throw rather than translated: the failures reachable
+                // here are a dropped connection, a cancelled export, and the
+                // cap, and `HumanError.describe` already has better words for
+                // the first two than one blanket sentence would.
+                data = try await Data(collecting: body, upTo: Self.exportByteCap)
+            case let .json(export):
+                data = try Self.exportEncoder().encode(export)
+            }
+            return ExportedFile(
+                data: data,
+                suggestedFilename: ContentDisposition.filename(from: sink.value)
+                    ?? ExportFilename.build(
+                        deviceId: deviceId, start: start, end: end, format: format
+                    ),
+                utType: format.utType
+            )
+        case .unauthorized: throw credentialWasRejected()
+        case .notFound:
+            throw ClientError.rejected("the hub has no device by that name any more")
+        case .unprocessableContent: throw ClientError.rejected("the hub refused that window")
+        case .serviceUnavailable:
+            throw ClientError.rejected("the hub has no telemetry store configured")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("historyExport returned \(statusCode)")
+        }
+    }
+
+    /// Pretty-printed, because the whole point of the file is that a person
+    /// opens it later. Slashes stay unescaped for the same reason. Dates go
+    /// through the transcoder this client is configured with, so an exported
+    /// timestamp matches the one the hub sent.
+    ///
+    /// Built per call, not shared: `JSONEncoder` is a class with mutable
+    /// options, the same reason `FractionalSecondsDateTranscoder` builds its
+    /// formatter per call. Once per export is not a hot path.
+    private static func exportEncoder() -> JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .withoutEscapingSlashes]
+        let transcoder = FractionalSecondsDateTranscoder()
+        encoder.dateEncodingStrategy = .custom { date, encoder in
+            var container = encoder.singleValueContainer()
+            try container.encode(transcoder.encode(date))
+        }
+        return encoder
     }
 
     // MARK: Alerts
