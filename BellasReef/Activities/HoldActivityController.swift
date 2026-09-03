@@ -83,7 +83,12 @@ final class HoldActivityController {
             // nothing has arrived yet, so judging an adopted banner
             // immediately would end every one of them against an empty
             // frame set before the socket had even connected.
-            startedAt[lightId] = Date()
+            //
+            // Only for a light this instance is not already tracking: this
+            // runs whenever the paired session's tabs appear, and an
+            // activity started a minute ago must not have its grace window
+            // silently restarted.
+            if startedAt[lightId] == nil { startedAt[lightId] = Date() }
         }
     }
 
