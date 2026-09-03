@@ -31,4 +31,22 @@ public enum RelativeAge {
         default: return "\(seconds / 86_400)d ago"
         }
     }
+
+    /// The same age with the tense left off, for a line whose own words
+    /// already carry it: "Hub unreachable · 4m" (the B3 status strip).
+    ///
+    /// Same clamping rule as `describe` — counted up, never a countdown — and
+    /// deliberately in the same type, so two phrasings of one number cannot
+    /// drift apart. No "just now" case: after a separator a bare "0s" reads as
+    /// an age, which is what it is.
+    public static func compact(from moment: Date, now: Date = Date()) -> String {
+        let seconds = Int(max(0, now.timeIntervalSince(moment)))
+
+        switch seconds {
+        case 0..<60: return "\(seconds)s"
+        case 60..<3600: return "\(seconds / 60)m"
+        case 3600..<86_400: return "\(seconds / 3600)h"
+        default: return "\(seconds / 86_400)d"
+        }
+    }
 }
