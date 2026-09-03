@@ -202,6 +202,30 @@ struct HumanErrorTests {
         #expect(!text.isEmpty)
         #expect(!text.contains("Domain="))
     }
+
+    // MARK: describe — a body past its collecting cap
+
+    /// The history export collects the CSV body under a 32 MB cap. Past it,
+    /// swift-openapi-runtime throws an error whose message names a library and
+    /// a byte count — grammatical enough that `looksLikeADump` waves it
+    /// straight through to the screen.
+    ///
+    /// Thrown for real rather than faked: the type is `private` to the runtime
+    /// and cannot be constructed here, and a stand-in that merely copied its
+    /// wording would stop agreeing with it the moment the runtime reworded
+    /// itself, which is the one thing this match depends on.
+    @Test("a body past the collecting cap reads as an export too large, not as a library message")
+    func overTheBodyCap() async throws {
+        let body = HTTPBody(Data(repeating: UInt8(ascii: "a"), count: 64))
+        do {
+            _ = try await Data(collecting: body, upTo: 8)
+            Issue.record("collecting 64 bytes under an 8-byte cap should throw")
+        } catch {
+            let text = HumanError.describe(error)
+            #expect(text == "This export is larger than the app can hold. Try a shorter range.")
+            #expect(!text.contains("OpenAPIRuntime"))
+        }
+    }
 }
 
 /// A stand-in underlying error: `OpenAPIRuntime.RuntimeError` is internal to

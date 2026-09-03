@@ -4,7 +4,11 @@ import Accessibility
 import BellasReefAPI
 import BellasReefKit
 import Charts
+import OSLog
 import SwiftUI
+import UIKit
+
+private let log = Logger(subsystem: "com.bellasreef.app", category: "history")
 
 /// Charts live here (design brief §3). The Tank tab keeps a sparkline; this is
 /// the tab that answers "what has it been doing".
@@ -15,6 +19,22 @@ struct HistoryTabView: View {
     @Environment(AppModel.self) private var model
     @Environment(\.scenePhase) private var scenePhase
     @State private var history: HistoryModel?
+
+    /// D7 export. `exporting` gates the toolbar, `exportFile` drives the share
+    /// sheet, `written` is the temporary file to delete once the sheet closes,
+    /// and `exportError` is the one sentence the operator sees.
+    @State private var exporting = false
+    @State private var exportFile: ExportPayload?
+    @State private var written: URL?
+    @State private var exportError: String?
+    /// The in-flight export, tracked so leaving the tab can cancel it.
+    ///
+    /// Untracked, it outlived the view: an export started here and then left
+    /// would still resolve, and `exportFile` drives a `.sheet`, so the share
+    /// sheet would appear over whatever tab the operator had moved to. The
+    /// same reasoning as `HistoryModel.loadTask` — a `Task` nobody holds is a
+    /// `Task` nobody can cancel.
+    @State private var exportTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -34,6 +54,27 @@ struct HistoryTabView: View {
             // Inline titles blurred over content that scrolled under them (UX
             // review B2). The soft edge effect is the system's answer.
             .scrollEdgeEffectStyle(.soft, for: .top)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    if exporting {
+                        ProgressView()
+                    } else if let history {
+                        ExportMenu(devices: exportableDevices, name: deviceName) { device, format in
+                            export(deviceId: device, format: format, range: history.range)
+                        }
+                    }
+                }
+            }
+            // A `ShareLink` cannot be used here: it is a Button, so it can
+            // only be tapped, and there is nothing to share until the export
+            // has been fetched and written. Rendering one after the fact
+            // would cost the operator a second tap on a control that appeared
+            // out of nowhere. `UIActivityViewController` in a sheet is the
+            // presentation the system offers for "share this, now", and it is
+            // the same sheet `ShareLink` puts up.
+            .sheet(item: $exportFile, onDismiss: discardExportFile) { payload in
+                ShareSheet(url: payload.url)
+            }
         }
         .task {
             // Runs on every appearance, not only on creation: SwiftUI cancels
@@ -55,12 +96,20 @@ struct HistoryTabView: View {
                 history = HistoryModel(client: client, catalog: catalog)
             }
             await history?.refresh()
+            // The export menu lists the registry, not the traces on screen —
+            // see `exportableDevices` — and this tab never loaded the
+            // registry before. Second, so the charts are not held up behind
+            // it. Idempotent, and the Tank tab has usually already done it.
+            await model.catalog?.refresh()
         }
         .onChange(of: scenePhase) { _, phase in
             // REST data does not push; returning to the app is when the
             // operator expects it to be current.
             if phase == .active { history?.reload() }
         }
+        // SwiftUI cancels this view's `.task` when the tab is switched away
+        // from; the export runs in a `Task` of its own and needs telling.
+        .onDisappear(perform: cancelExport)
     }
 
     @ViewBuilder
@@ -70,6 +119,13 @@ struct HistoryTabView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
                 RangePicker(selection: $history.range)
+
+                // An export that failed must not take the charts down with
+                // it: this is a banner above them, not a replacement for
+                // them, and the sentence in it comes from `HumanError`.
+                if let exportError {
+                    ExportFailure(why: exportError) { self.exportError = nil }
+                }
 
                 switch history.state {
                 case .idle, .loading:
@@ -102,6 +158,149 @@ struct HistoryTabView: View {
         }
         .refreshable { await history.refresh() }
     }
+
+    // MARK: Export (D7)
+
+    /// The registry, not the traces on screen.
+    ///
+    /// A trace only exists for a device that recorded something inside the
+    /// selected window, and the reason to export is often that the chart is
+    /// not enough — a device that has been quiet all hour is exactly the one
+    /// worth pulling a week of. Unadopted rows are left out: they belong to
+    /// nobody yet, and the hub has no telemetry under them.
+    private var exportableDevices: [Components.Schemas.DeviceView] {
+        (model.catalog?.devices ?? [])
+            .filter(\.adopted)
+            .sorted { deviceName($0.deviceId) < deviceName($1.deviceId) }
+    }
+
+    private func deviceName(_ deviceId: String) -> String {
+        model.catalog?.name(for: deviceId) ?? deviceId
+    }
+
+    /// Fetch, write, then present. The window is the picked range ending now,
+    /// which is what the chart is showing; the file's own name records both
+    /// bounds, so nothing about which window this was is left to memory.
+    private func export(deviceId: String, format: ExportFormat, range: HistoryRange) {
+        guard let client = model.client else { return }
+        exporting = true
+        exportError = nil
+        exportTask?.cancel()
+        exportTask = Task {
+            defer { exporting = false }
+            let end = Date()
+            let start = end.addingTimeInterval(-range.duration)
+            do {
+                let file = try await client.exportHistory(
+                    deviceId: deviceId, from: start, to: end, format: format
+                )
+                // A request that landed just as the operator left the tab
+                // must not go on to raise a sheet over the tab they went to.
+                // `exportHistory` does not check cancellation itself.
+                try Task.checkCancellation()
+                discardExportFile()
+                let url = FileManager.default.temporaryDirectory
+                    .appending(path: file.suggestedFilename)
+                try file.data.write(to: url, options: .atomic)
+                written = url
+                exportFile = ExportPayload(url: url)
+            } catch {
+                // Cancellation is our own doing — leaving the tab, or a second
+                // export superseding this one — and is not news for the
+                // operator. Same rule as `HistoryModel.load()`.
+                guard !HumanError.isCancellation(error) else { return }
+                log.error("history export failed: \(String(describing: error))")
+                exportError = HumanError.describe(error)
+            }
+        }
+    }
+
+    /// Drops an export nobody is waiting for any more.
+    private func cancelExport() {
+        exportTask?.cancel()
+        exportTask = nil
+    }
+
+    /// Deletes the temporary file once the share sheet has closed.
+    ///
+    /// The share sheet has finished with the URL by the time it dismisses —
+    /// an activity that copies the file has already copied it. Leaving it
+    /// would be harmless (the system reclaims its own temporary directory)
+    /// but a tank's week of readings is not something to leave lying around
+    /// unasked.
+    private func discardExportFile() {
+        guard let written else { return }
+        try? FileManager.default.removeItem(at: written)
+        self.written = nil
+    }
+}
+
+/// The file, waiting for the share sheet. `URL` is not `Identifiable`, and
+/// `.sheet(item:)` wants something that is.
+struct ExportPayload: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+/// Device, then format. Two levels because the export is per device and the
+/// hub has more than one: a flat list of "Export <name> as CSV" grows as
+/// devices times formats.
+struct ExportMenu: View {
+    let devices: [Components.Schemas.DeviceView]
+    let name: (String) -> String
+    let export: (String, ExportFormat) -> Void
+
+    var body: some View {
+        Menu {
+            ForEach(devices, id: \.deviceId) { device in
+                Menu(name(device.deviceId)) {
+                    ForEach(ExportFormat.allCases) { format in
+                        Button("Export \(format.label)") { export(device.deviceId, format) }
+                    }
+                }
+            }
+        } label: {
+            Label("Export", systemImage: "square.and.arrow.up")
+        }
+        // Nothing adopted means nothing to export. Disabled rather than
+        // hidden, so the control does not appear and disappear as the
+        // registry loads.
+        .disabled(devices.isEmpty)
+    }
+}
+
+/// An export that failed. Same vocabulary as `Failure` above, different
+/// verb and a dismissal rather than a retry: the menu that started this is
+/// still in the toolbar, so a second attempt is one tap away already.
+struct ExportFailure: View {
+    let why: String
+    let dismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Label("Could not export", systemImage: "exclamationmark.triangle.fill")
+                .font(.headline)
+                .foregroundStyle(Theme.attention)
+            Text(why)
+                .font(Theme.caption)
+                .foregroundStyle(Theme.secondaryText)
+            Button("Dismiss", action: dismiss)
+                .buttonStyle(.bordered)
+                .frame(minHeight: 44)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
+/// `UIActivityViewController`, because this sheet is put up in code.
+struct ShareSheet: UIViewControllerRepresentable {
+    let url: URL
+
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: [url], applicationActivities: nil)
+    }
+
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
 
 struct RangePicker: View {
