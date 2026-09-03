@@ -6,17 +6,17 @@ reviewable diff rather than something that shifts under the app.
 
 | | |
 |---|---|
-| Backend commit | `0eeae2b3` (PR #92, `feat/hub-status-backend`) |
-| CI run | [`33448732731`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/33448732731) (`client-contracts` artifact) |
-| Pinned on | 2026-08-31 |
-| OpenAPI | 3.1.0, 28 paths |
-| Contracts version | 4.3.0 |
+| Backend commit | `2e52de3` (PR #102, history export) |
+| CI run | [`33811813543`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/33811813543) (`client-contracts` artifact) |
+| Pinned on | 2026-09-03 |
+| OpenAPI | 3.1.0, 29 paths |
+| Contracts version | 4.4.0 |
 | Frame schema | v1 |
 
-Pinned from the PR's own CI run rather than main — the artifact is
-byte-identical to what the squash-merge produces, and waiting on the merge
-would have serialised two repos' work for no diff. Re-pin from main after
-the merge if the run id matters for provenance.
+Pinned from main this time, off the run for the squash-merge commit itself.
+The 4.3.0 pin before it came from a PR's own run — byte-identical to what the
+merge produces, and taken early so two repos' work did not serialise — which
+is the exception, not the habit.
 
 ## Refreshing
 
@@ -143,3 +143,32 @@ Additive; no generated type changed shape, no fixture broke. 404 is
 documented ("no host status published yet") and the wrapper returns `nil`
 for it — a fresh boot or a pre-4.3.0 hub reads as unavailable, not as an
 error.
+
+## What 4.3.0 → 4.4.0 added
+
+History export (backend spec 2026-09-03, PR #102): the whole of one device's
+record for a window, as a file, instead of the downsampled view the chart
+draws.
+
+| Symbol | Why it was missing from the app |
+|---|---|
+| `GET /api/v1/history/export` (`historyExport`) | the History tab could show a week and hand over none of it |
+| `HistoryExport` | the JSON form — `device_id`, `metric`, `start`, `end`, and every stored sample |
+| `ExportSample` | one reading as written: `at`, `value`, nullable `quality`. Nothing aggregated |
+
+Additive. Nothing was removed and no existing type changed shape, so no
+fixture broke.
+
+Two things about the operation that shape the client code, both visible in
+the spec above rather than guessed:
+
+- The 200 declares **two** content types — `text/csv` and
+  `application/json` — so the generated `Ok.Body` is an enum with a
+  `.csv(HTTPBody)` case and a `.json(HistoryExport)` case. Which one arrives
+  is decided by the `format` query parameter, not by content negotiation.
+- The `Content-Disposition` filename the endpoint sets is documented in the
+  handler but **not declared as a response header** in the spec, so the
+  generator emits no `Ok.Headers` and the value never reaches a call site.
+  `HubClient` lifts it out of the raw response with a middleware and falls
+  back to building the same name locally (`ExportFilename`). Declaring the
+  header in the backend spec would delete that middleware.
