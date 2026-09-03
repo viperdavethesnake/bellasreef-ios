@@ -89,6 +89,21 @@ public struct LightingCard: Equatable, Identifiable, Sendable {
     }
 }
 
+/// Is this registry row a light this operator can command?
+///
+/// Adopted `light`-role actuators only. A detached light (`adopted == false`)
+/// is not one: unbind is not a delete, and a channel someone else could
+/// reclaim is not this operator's to command.
+///
+/// Named and public rather than left inline in `lightingCards`' filter,
+/// because the Lighting tab is no longer the only thing that has to agree on
+/// what a light is — the App Intents `LightQuery` (UX review D3) offers the
+/// same set to Siri, Spotlight and Shortcuts, and two copies of this
+/// predicate would be two answers to one question.
+public func isLight(_ device: Components.Schemas.DeviceView) -> Bool {
+    device.adopted == true && device.role == "light"
+}
+
 /// Merge the registry and the stream into the Lighting tab's card list.
 ///
 /// Adopted `light`-role actuators only — `equipmentRows` renders every role
@@ -107,7 +122,7 @@ public func lightingCards(
     schedules: [Components.Schemas.ScheduleView] = []
 ) -> [LightingCard] {
     devices
-        .filter { $0.adopted == true && $0.role == "light" }
+        .filter(isLight)
         .map { device in
             let frame = frames[device.deviceId]
             let assigned = schedules.first { $0.assignedChannels.contains(device.deviceId) }
@@ -204,4 +219,44 @@ public func effectiveHold(
 public func allowedDurations(maxRuntimeS: Double?) -> [DurationPreset] {
     guard let cap = maxRuntimeS else { return DurationPreset.allCases }
     return DurationPreset.allCases.filter { $0.rawValue <= cap }
+}
+
+/// The longest hold this target will accept, in whole minutes: the hub's
+/// documented ceiling and this device's own declared `max_runtime_s`,
+/// whichever is lower. The same rule `allowedDurations` applies to the
+/// presets, for the arbitrary minute counts a custom duration or a shortcut
+/// can produce.
+///
+/// Both halves have to be checked here, because nothing below this client
+/// checks the second one. `POST /api/v1/overrides` gates on `observe_only`
+/// authority and on clock trust and on nothing else — it does not compare
+/// `duration_s` against the target's `max_runtime_s`. Downstream,
+/// hardware-io's `_runtime_deadline` latches its guard once a hold outlives
+/// `max_runtime_s`, and there is no automatic path back out. So an
+/// over-runtime hold is accepted, and then latches a channel: the client is
+/// the only thing standing between the operator and that, which is why this
+/// cap exists and why every door onto a hold has to go through it.
+///
+/// The `nil` branch is defensive rather than expected — an authoritative
+/// `light`-role actuator declares a runtime at registration
+/// (device-classes.md §2) — and falls back to the spec's own ceiling rather
+/// than to no ceiling at all.
+///
+/// Whole-minute truncation, never rounding up: a rounded-up cap is a number
+/// the hub would refuse.
+///
+/// Floored at one minute, which is the spec's own smallest hold
+/// (`duration_s` carries `exclusiveMinimum: 0`, so one whole minute is the
+/// floor `IntentSupport.minHoldMinutes` names). Truncation alone returns 0
+/// for any runtime under a minute, and a cap of 0 is not a number this
+/// function can honestly return: every sentence built on it reads "between 1
+/// and 0 minutes" and every field seeded from it starts invalid. A
+/// sub-minute `max_runtime_s` is a device declaring that no hold this client
+/// can express fits inside it; the honest answer is the smallest hold there
+/// is, and the hub refusing it, rather than a range with no members.
+public func holdMinutesCap(maxRuntimeS: Double?) -> Int {
+    guard let maxRuntimeS, maxRuntimeS > 0 else { return IntentSupport.maxHoldMinutes }
+    return max(
+        IntentSupport.minHoldMinutes, min(IntentSupport.maxHoldMinutes, Int(maxRuntimeS / 60))
+    )
 }

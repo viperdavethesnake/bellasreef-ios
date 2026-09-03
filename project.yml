@@ -39,9 +39,17 @@ targets:
     platform: iOS
     sources:
       - path: BellasReef
+      # Compiled into this target AND BellasReefActivity. The Live Activity's
+      # attributes and the intent behind its Release button have to be one
+      # declaration in both, because ActivityKit and App Intents encode them
+      # across the app/extension process boundary. Shared/ says why they are
+      # not kit types.
+      - path: Shared
     dependencies:
       - package: BellasReefKit
         product: BellasReefKit
+      # XcodeGen embeds an app-extension dependency into the app bundle.
+      - target: BellasReefActivity
     info:
       path: BellasReef/Info.plist
       properties:
@@ -49,6 +57,9 @@ targets:
         CFBundleShortVersionString: "0.1.0"
         CFBundleVersion: "1"
         UILaunchScreen: {}
+        # Without this the system refuses every Activity.request (UX review
+        # D2). It is the app's declaration to make, not the extension's.
+        NSSupportsLiveActivities: true
         # No UIUserInterfaceStyle pin: the app follows the system appearance
         # (UX-1). Dark stays primary by design intent (design brief §2) — the
         # Theme palette resolves an unspecified trait to dark — not by pin.
@@ -65,6 +76,45 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.bellasreef.app
         TARGETED_DEVICE_FAMILY: "1,2"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+      # Shared/ReleaseHoldIntent.swift compiles into both targets, and only
+      # the app's copy carries a body: the extension must not link
+      # BellasReefKit (and through it the swift-openapi runtime) to draw a
+      # countdown. Spelled per-configuration rather than in `base` because
+      # XcodeGen writes SWIFT_ACTIVE_COMPILATION_CONDITIONS per configuration,
+      # and a per-config value silently wins over a base one.
+      configs:
+        Debug:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: DEBUG BELLASREEF_APP
+        Release:
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: BELLASREEF_APP
+
+  # The Live Activity for a manual hold (UX review D2): Lock Screen banner and
+  # Dynamic Island, with a Release button. A WidgetKit extension, embedded by
+  # the app target above.
+  #
+  # Deliberately dependency-free — no BellasReefKit, no BellasReefAPI. It gets
+  # four strings and a date through HoldActivityAttributes and draws them;
+  # every call to the hub happens in the app's process, which is the only one
+  # holding the Keychain credential.
+  BellasReefActivity:
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: BellasReefActivity
+      - path: Shared
+    info:
+      path: BellasReefActivity/Info.plist
+      properties:
+        CFBundleDisplayName: Bella's Reef
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.bellasreef.app.activity
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SKIP_INSTALL: YES
 
   # Drives the real pairing flow against a real hub on the LAN. Not a CI target:
   # it consumes a pairing window and creates a paired client on the hub, so it is

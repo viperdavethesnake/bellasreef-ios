@@ -250,13 +250,16 @@ private struct LightingCardView: View {
 
     private enum Problem: Equatable {
         /// 503 — pinned copy, not `HumanError` (plan Global Constraints).
+        /// The sentence itself now lives in `HoldRefusal` (kit), because the
+        /// Hold app intent answers the same refusal and must say the same
+        /// thing (UX review D3).
         case clockUntrusted
         case message(String)
 
         var text: String {
             switch self {
             case .clockUntrusted:
-                "The hub's clock is not trusted yet — holds need a deadline."
+                HoldRefusal.clockUntrusted.message
             case let .message(text):
                 text
             }
@@ -273,8 +276,9 @@ private struct LightingCardView: View {
         // AdoptDeviceSheet's poll-interval default): an empty field read as
         // invalid before the operator had touched anything, so the amber
         // hint appeared on a card nobody had edited yet.
-        let capMinutes = card.maxRuntimeS.map { Int($0 / 60) }
-        _customMinutesText = State(initialValue: String(max(1, min(capMinutes ?? 60, 60))))
+        _customMinutesText = State(
+            initialValue: String(min(holdMinutesCap(maxRuntimeS: card.maxRuntimeS), 60))
+        )
     }
 
     /// This card's own call into the pure `effectiveHold(...)` precedence
@@ -501,6 +505,15 @@ private struct LightingCardView: View {
             // surviving to be wrongly consulted later, after the frame goes
             // quiet again for real (the hold's natural expiry).
             if newValue != nil { optimisticHold = nil }
+            // Keep the Lock Screen banner on the hub's own account of this
+            // hold — the level it reports may differ from the one that was
+            // asked for (the 8 % floor snaps down). Matched by override id
+            // inside the controller, so a frame describing a *different*
+            // hold updates nothing; that case is a supersede, and `hold()`
+            // starts a fresh activity for it.
+            if let newValue {
+                Task { await HoldActivityController.shared.update(hold: newValue) }
+            }
         }
         // §7.4 standard destructive-confirm pattern, the same shape
         // SystemView uses for Revoke/Unadopt/Clear (ruled 2026-08-15: this
@@ -617,22 +630,23 @@ private struct LightingCardView: View {
 
     // MARK: Duration math
 
-    private var capMinutes: Int? { card.maxRuntimeS.map { Int($0 / 60) } }
+    /// The kit's one cap rule, shared with the Hold app intent (UX review D3)
+    /// — this used to be `max_runtime_s / 60` and nothing else, which let a
+    /// card with no declared runtime offer a duration the hub's own spec
+    /// refuses. `holdMinutesCap` folds both ceilings together and always has
+    /// one, so this is no longer optional.
+    private var capMinutes: Int { holdMinutesCap(maxRuntimeS: card.maxRuntimeS) }
 
     private var customMinutes: Int? {
         Int(customMinutesText.trimmingCharacters(in: .whitespaces))
     }
 
     private var customMinutesValid: Bool {
-        guard let minutes = customMinutes, minutes >= 1 else { return false }
-        if let cap = capMinutes, minutes > cap { return false }
-        return true
+        guard let minutes = customMinutes else { return false }
+        return IntentSupport.durationS(minutes: minutes, maxRuntimeS: card.maxRuntimeS) != nil
     }
 
-    private var customMinutesHint: String {
-        if let cap = capMinutes { return "Enter 1–\(cap) minutes." }
-        return "Enter at least 1 minute."
-    }
+    private var customMinutesHint: String { "Enter 1–\(capMinutes) minutes." }
 
     /// `nil` means "not a legal hold right now" — the Hold button reads this
     /// directly rather than duplicating the validation.
@@ -640,8 +654,8 @@ private struct LightingCardView: View {
         switch durationChoice {
         case let .preset(preset): return preset.rawValue
         case .custom:
-            guard customMinutesValid, let minutes = customMinutes else { return nil }
-            return Double(minutes) * 60
+            guard let minutes = customMinutes else { return nil }
+            return IntentSupport.durationS(minutes: minutes, maxRuntimeS: card.maxRuntimeS)
         }
     }
 
@@ -662,10 +676,16 @@ private struct LightingCardView: View {
                 // 2026-08-15) — `effectiveHold` prefers `card.hold` the
                 // moment the frame catches up, so this is only ever the
                 // gap-filler.
-                optimisticHold = LightingCard.ActiveHold(
+                let granted = LightingCard.ActiveHold(
                     id: overrideView.id, duty: overrideView.duty, expiresAt: overrideView.expiresAt,
                     transition: HubClient.HoldTransition(overrideView.transition)
                 )
+                optimisticHold = granted
+                // The same grant, on the Lock Screen (UX review D2). Started
+                // from the grant rather than the next frame for the same
+                // reason the card shows it optimistically: the banner should
+                // be there when the operator looks up from the tap.
+                await HoldActivityController.shared.start(hold: granted, light: card)
                 // Seed `releasedIDs` with whatever hold the frame currently
                 // shows, rather than clearing it (review round 2, 2026-08-15
                 // — I1): a re-hold at the SAME duty is a supersede on the
@@ -681,7 +701,7 @@ private struct LightingCardView: View {
                 // sitting frozen at what was just submitted (SF9).
                 draftTouched = false
             case .notCommandable:
-                problem = .message("This light is observe-only and can't be commanded from here.")
+                problem = .message(HoldRefusal.notCommandable.message)
             case .clockUntrusted:
                 problem = .clockUntrusted
             }
@@ -703,6 +723,7 @@ private struct LightingCardView: View {
             _ = try await client.release(overrideId: overrideId)
             optimisticHold = nil
             releasedIDs.insert(overrideId)
+            await HoldActivityController.shared.end(overrideId: overrideId)
         } catch {
             problem = .message(HumanError.describe(error))
         }

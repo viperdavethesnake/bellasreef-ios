@@ -159,4 +159,31 @@ struct OverrideTests {
         )
         _ = try await client.release(overrideId: "8f14e45f-ceea-467e-9575-6e3c8e9caeb2")
     }
+
+    /// The Release app intent has no stream to read a hold off, so this list
+    /// is its only route to the id that ends one (UX review D3).
+    @Test("the live-hold list decodes, and target is the device id to filter on")
+    func listsLiveHolds() async throws {
+        let client = stub { operation in
+            #expect(operation == "listOverrides")
+            return (200, json(#"""
+                [{"id": "8f14e45f-ceea-467e-9575-6e3c8e9caeb2", "target": "pca9685-0",
+                  "duty": 0.6, "expires_at": "2026-08-15T00:20:00Z", "expires_in_s": 1200,
+                  "transition": "ramp"},
+                 {"id": "c9f0f895-fb98-4b18-9c5c-0a1b2c3d4e5f", "target": "pi-pwm-0",
+                  "duty": 0.15, "expires_at": "2026-08-15T00:35:00Z", "expires_in_s": 2100,
+                  "transition": "snap"}]
+                """#))
+        }
+        let live = try await client.overrides()
+        #expect(live.count == 2)
+        #expect(live.first { $0.target == "pi-pwm-0" }?.id == "c9f0f895-fb98-4b18-9c5c-0a1b2c3d4e5f")
+        #expect(live.first { $0.target == "no-such-light" } == nil)
+    }
+
+    @Test("an empty list is nothing held, not a failure")
+    func listsNoHolds() async throws {
+        let client = stub { _ in (200, json("[]")) }
+        #expect(try await client.overrides().isEmpty)
+    }
 }
