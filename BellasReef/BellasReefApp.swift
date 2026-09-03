@@ -75,9 +75,8 @@ final class AppModel {
     /// ever" promise from auth.md — every later launch is a token refresh and
     /// straight to the dashboard.
     func restore(lastHub: Hub?) async {
-        guard let hub = lastHub else { return }
-        let client = HubClient(hub: hub)
-        guard await client.isPaired() else { return }
+        guard let hub = lastHub,
+              let client = await HubClientFactory.paired(with: hub) else { return }
         adopt(client, hub: hub)
     }
 
