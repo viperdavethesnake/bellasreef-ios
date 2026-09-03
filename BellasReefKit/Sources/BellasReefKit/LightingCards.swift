@@ -89,6 +89,21 @@ public struct LightingCard: Equatable, Identifiable, Sendable {
     }
 }
 
+/// Is this registry row a light this operator can command?
+///
+/// Adopted `light`-role actuators only. A detached light (`adopted == false`)
+/// is not one: unbind is not a delete, and a channel someone else could
+/// reclaim is not this operator's to command.
+///
+/// Named and public rather than left inline in `lightingCards`' filter,
+/// because the Lighting tab is no longer the only thing that has to agree on
+/// what a light is — the App Intents `LightQuery` (UX review D3) offers the
+/// same set to Siri, Spotlight and Shortcuts, and two copies of this
+/// predicate would be two answers to one question.
+public func isLight(_ device: Components.Schemas.DeviceView) -> Bool {
+    device.adopted == true && device.role == "light"
+}
+
 /// Merge the registry and the stream into the Lighting tab's card list.
 ///
 /// Adopted `light`-role actuators only — `equipmentRows` renders every role
@@ -107,7 +122,7 @@ public func lightingCards(
     schedules: [Components.Schemas.ScheduleView] = []
 ) -> [LightingCard] {
     devices
-        .filter { $0.adopted == true && $0.role == "light" }
+        .filter(isLight)
         .map { device in
             let frame = frames[device.deviceId]
             let assigned = schedules.first { $0.assignedChannels.contains(device.deviceId) }

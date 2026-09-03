@@ -515,6 +515,28 @@ public actor HubClient {
         }
     }
 
+    /// Every hold live on the hub right now (`GET /api/v1/overrides`).
+    ///
+    /// The Lighting tab never needs this: it learns a hold from the state
+    /// frame's `override`, arriving on a socket it is already holding open. A
+    /// caller with no stream — the Release app intent, woken by Shortcuts or
+    /// by a Live Activity button, with nothing subscribed — has no other way
+    /// to learn the id that ends a hold. `OverrideView.target` is the device
+    /// id, so the row for one light is a filter away.
+    ///
+    /// The hub does not document result ordering, so a caller that cares
+    /// sorts the page itself.
+    public func overrides() async throws -> [Components.Schemas.OverrideView] {
+        switch try await client.listOverrides() {
+        case let .ok(response): return try response.body.json
+        case .unauthorized: throw credentialWasRejected()
+        case .unprocessableContent:
+            throw ClientError.unexpected("the hub rejected the overrides query")
+        case let .undocumented(statusCode, _):
+            throw ClientError.unexpected("overrides returned \(statusCode)")
+        }
+    }
+
     public func hold(
         target: String, duty: Double, durationS: Double, reason: String,
         transition: HoldTransition

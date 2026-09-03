@@ -250,13 +250,16 @@ private struct LightingCardView: View {
 
     private enum Problem: Equatable {
         /// 503 — pinned copy, not `HumanError` (plan Global Constraints).
+        /// The sentence itself now lives in `HoldRefusal` (kit), because the
+        /// Hold app intent answers the same refusal and must say the same
+        /// thing (UX review D3).
         case clockUntrusted
         case message(String)
 
         var text: String {
             switch self {
             case .clockUntrusted:
-                "The hub's clock is not trusted yet — holds need a deadline."
+                HoldRefusal.clockUntrusted.message
             case let .message(text):
                 text
             }
@@ -681,7 +684,7 @@ private struct LightingCardView: View {
                 // sitting frozen at what was just submitted (SF9).
                 draftTouched = false
             case .notCommandable:
-                problem = .message("This light is observe-only and can't be commanded from here.")
+                problem = .message(HoldRefusal.notCommandable.message)
             case .clockUntrusted:
                 problem = .clockUntrusted
             }
