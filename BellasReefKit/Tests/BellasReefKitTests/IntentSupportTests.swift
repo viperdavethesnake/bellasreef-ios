@@ -26,13 +26,57 @@ struct IntentSupportTests {
 
     @Test("minutes become seconds inside the bounds, and nothing outside them")
     func minutesToSeconds() {
-        #expect(IntentSupport.durationS(minutes: 1) == 60)
-        #expect(IntentSupport.durationS(minutes: 15) == 900)
-        #expect(IntentSupport.durationS(minutes: 1440) == 86_400)
+        #expect(IntentSupport.durationS(minutes: 1, maxRuntimeS: nil) == 60)
+        #expect(IntentSupport.durationS(minutes: 15, maxRuntimeS: nil) == 900)
+        #expect(IntentSupport.durationS(minutes: 1440, maxRuntimeS: nil) == 86_400)
         // exclusiveMinimum 0: a zero-length hold is not a hold.
-        #expect(IntentSupport.durationS(minutes: 0) == nil)
-        #expect(IntentSupport.durationS(minutes: -5) == nil)
-        #expect(IntentSupport.durationS(minutes: 1441) == nil)
+        #expect(IntentSupport.durationS(minutes: 0, maxRuntimeS: nil) == nil)
+        #expect(IntentSupport.durationS(minutes: -5, maxRuntimeS: nil) == nil)
+        #expect(IntentSupport.durationS(minutes: 1441, maxRuntimeS: nil) == nil)
+    }
+
+    // MARK: The target's own runtime ceiling
+
+    /// The API does not check a hold against the target's `max_runtime_s`
+    /// (`create_override` gates on `observe_only` authority and on clock
+    /// trust, and on nothing else), and hardware-io's `_runtime_deadline`
+    /// latches a channel that outlives one, with no automatic path out. So
+    /// this cap is the only thing in the way, and every door onto a hold has
+    /// to go through it.
+    @Test("the cap is the lower of the spec's ceiling and the light's own runtime")
+    func cap() {
+        // 18 h, the runtime an authoritative light declares by default.
+        #expect(holdMinutesCap(maxRuntimeS: 64_800) == 1080)
+        #expect(holdMinutesCap(maxRuntimeS: 3600) == 60)
+        // Longer than the spec allows: the spec's ceiling wins.
+        #expect(holdMinutesCap(maxRuntimeS: 172_800) == IntentSupport.maxHoldMinutes)
+        // Undeclared, or nonsense: fall back to the spec's ceiling rather than
+        // to no ceiling at all.
+        #expect(holdMinutesCap(maxRuntimeS: nil) == IntentSupport.maxHoldMinutes)
+        #expect(holdMinutesCap(maxRuntimeS: 0) == IntentSupport.maxHoldMinutes)
+        // Truncated, never rounded up: 90 s is one whole minute, not two.
+        #expect(holdMinutesCap(maxRuntimeS: 90) == 1)
+    }
+
+    @Test("a hold longer than the light's own runtime is refused, not clamped")
+    func durationRespectsTheLightsRuntime() {
+        #expect(IntentSupport.durationS(minutes: 1080, maxRuntimeS: 64_800) == 64_800)
+        #expect(IntentSupport.durationS(minutes: 1081, maxRuntimeS: 64_800) == nil)
+        // Inside the spec's 1440 but past this light's own 60.
+        #expect(IntentSupport.durationS(minutes: 60, maxRuntimeS: 3600) == 3600)
+        #expect(IntentSupport.durationS(minutes: 61, maxRuntimeS: 3600) == nil)
+    }
+
+    @Test("the refusal names the cap that actually applied")
+    func minutesOutOfRangeCopy() {
+        #expect(
+            IntentSupport.minutesOutOfRange(maxRuntimeS: 64_800)
+                == "A hold on this light has to be between 1 and 1080 minutes."
+        )
+        #expect(
+            IntentSupport.minutesOutOfRange(maxRuntimeS: nil)
+                == "A hold on this light has to be between 1 and 1440 minutes."
+        )
     }
 
     // MARK: Percent to duty

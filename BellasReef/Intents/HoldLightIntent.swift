@@ -70,13 +70,17 @@ struct HoldLightIntent: AppIntent, LiveActivityIntent {
     @Parameter(title: "Brightness", inclusiveRange: (0, 100))
     var percent: Int
 
-    /// 1…1440 is `IntentSupport.minHoldMinutes`…`maxHoldMinutes`, spelled as
-    /// literals because `inclusiveRange:` takes only compile-time constants
-    /// ("expect a compile-time constant literal"). The named constants stay
-    /// the authority — `perform()` re-checks against them, and the kit test
-    /// pins them to the spec's `duration_s` bounds — so a drift here is a
-    /// picker that offers a value the intent then refuses with a sentence,
-    /// not a hold the hub 422s.
+    /// 1…1440 is the spec's own `duration_s` window
+    /// (`IntentSupport.minHoldMinutes`…`maxHoldMinutes`), spelled as literals
+    /// because `inclusiveRange:` takes only compile-time constants ("expect a
+    /// compile-time constant literal").
+    ///
+    /// Deliberately the *wider* of the two ceilings. Which one actually
+    /// applies depends on the light that gets resolved — a channel's own
+    /// `max_runtime_s` is usually shorter (18 h, so 1080 minutes) — and an
+    /// attribute cannot see a parameter. `perform()` is where the real cap is
+    /// checked, so a minute count the picker allowed and the light will not
+    /// take comes back as a sentence naming that light's own limit.
     @Parameter(title: "Minutes", default: 15, inclusiveRange: (1, 1440))
     var minutes: Int
 
@@ -90,16 +94,22 @@ struct HoldLightIntent: AppIntent, LiveActivityIntent {
     }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
-        // Re-read the bounds rather than trusting the picker: a shortcut can
-        // be handed a value from an earlier step that never went through a
-        // slider.
+        // Check the bounds here rather than trusting the picker: a shortcut
+        // can be handed a value from an earlier step that never went through
+        // a slider.
         guard let duty = IntentSupport.duty(percent: percent) else {
             throw IntentFailure.outOfRange("Brightness has to be between 0 and 100 percent.")
         }
-        guard let durationS = IntentSupport.durationS(minutes: minutes) else {
+        // And this is the only place the *light's own* ceiling can be applied,
+        // because it is not known until the entity resolves. Nothing below
+        // this client applies it: `create_override` gates on authority and
+        // clock trust alone, and hardware-io latches a channel that outlives
+        // `max_runtime_s`.
+        guard let durationS = IntentSupport.durationS(
+            minutes: minutes, maxRuntimeS: light.maxRuntimeS
+        ) else {
             throw IntentFailure.outOfRange(
-                "A hold has to be between \(IntentSupport.minHoldMinutes) and "
-                    + "\(IntentSupport.maxHoldMinutes) minutes."
+                IntentSupport.minutesOutOfRange(maxRuntimeS: light.maxRuntimeS)
             )
         }
         guard let client = await HubClientFactory.remembered() else {

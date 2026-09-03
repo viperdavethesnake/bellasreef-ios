@@ -58,19 +58,31 @@ public enum IntentSupport {
     public static let maxHoldMinutes = Int(maxHoldDurationS / 60)
 
     /// Seconds for `HubClient.hold(durationS:)`, or nil when the request is
-    /// outside what the hub documents.
+    /// longer than this target will accept.
     ///
-    /// Nil rather than a clamp: silently holding for 24 hours because someone
+    /// `maxRuntimeS` is the resolved target's own declared ceiling, and it is
+    /// a required argument on purpose. The API does **not** check a hold
+    /// against `max_runtime_s` — `create_override` gates on `observe_only`
+    /// authority and on clock trust, and on nothing else — and hardware-io's
+    /// `_runtime_deadline` latches a channel that outlives one, with no
+    /// automatic path back out. A caller that forgot to pass it would be the
+    /// whole bug. `holdMinutesCap` is the one rule, shared with the Lighting
+    /// tab's custom-duration field.
+    ///
+    /// Nil rather than a clamp: silently holding for 18 hours because someone
     /// asked for 30 is not the command they gave, and a hold is a deadline on
     /// a real fixture.
-    ///
-    /// A device's own `max_runtime_s` can be shorter still — the hub enforces
-    /// that at registration time (device-classes.md §2) and refuses what it
-    /// will not honour, which is the one place it can be checked against the
-    /// target the intent has actually resolved.
-    public static func durationS(minutes: Int) -> Double? {
-        guard minutes >= minHoldMinutes, minutes <= maxHoldMinutes else { return nil }
+    public static func durationS(minutes: Int, maxRuntimeS: Double?) -> Double? {
+        guard minutes >= minHoldMinutes,
+              minutes <= holdMinutesCap(maxRuntimeS: maxRuntimeS) else { return nil }
         return Double(minutes) * 60
+    }
+
+    /// Why that duration was refused — the spoken twin of the Lighting tab's
+    /// "Enter 1–1080 minutes." hint, naming the cap that actually applied.
+    public static func minutesOutOfRange(maxRuntimeS: Double?) -> String {
+        "A hold on this light has to be between \(minHoldMinutes) and "
+            + "\(holdMinutesCap(maxRuntimeS: maxRuntimeS)) minutes."
     }
 
     // MARK: Level

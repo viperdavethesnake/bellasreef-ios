@@ -276,8 +276,9 @@ private struct LightingCardView: View {
         // AdoptDeviceSheet's poll-interval default): an empty field read as
         // invalid before the operator had touched anything, so the amber
         // hint appeared on a card nobody had edited yet.
-        let capMinutes = card.maxRuntimeS.map { Int($0 / 60) }
-        _customMinutesText = State(initialValue: String(max(1, min(capMinutes ?? 60, 60))))
+        _customMinutesText = State(
+            initialValue: String(min(holdMinutesCap(maxRuntimeS: card.maxRuntimeS), 60))
+        )
     }
 
     /// This card's own call into the pure `effectiveHold(...)` precedence
@@ -620,22 +621,23 @@ private struct LightingCardView: View {
 
     // MARK: Duration math
 
-    private var capMinutes: Int? { card.maxRuntimeS.map { Int($0 / 60) } }
+    /// The kit's one cap rule, shared with the Hold app intent (UX review D3)
+    /// — this used to be `max_runtime_s / 60` and nothing else, which let a
+    /// card with no declared runtime offer a duration the hub's own spec
+    /// refuses. `holdMinutesCap` folds both ceilings together and always has
+    /// one, so this is no longer optional.
+    private var capMinutes: Int { holdMinutesCap(maxRuntimeS: card.maxRuntimeS) }
 
     private var customMinutes: Int? {
         Int(customMinutesText.trimmingCharacters(in: .whitespaces))
     }
 
     private var customMinutesValid: Bool {
-        guard let minutes = customMinutes, minutes >= 1 else { return false }
-        if let cap = capMinutes, minutes > cap { return false }
-        return true
+        guard let minutes = customMinutes else { return false }
+        return IntentSupport.durationS(minutes: minutes, maxRuntimeS: card.maxRuntimeS) != nil
     }
 
-    private var customMinutesHint: String {
-        if let cap = capMinutes { return "Enter 1–\(cap) minutes." }
-        return "Enter at least 1 minute."
-    }
+    private var customMinutesHint: String { "Enter 1–\(capMinutes) minutes." }
 
     /// `nil` means "not a legal hold right now" — the Hold button reads this
     /// directly rather than duplicating the validation.
@@ -643,8 +645,8 @@ private struct LightingCardView: View {
         switch durationChoice {
         case let .preset(preset): return preset.rawValue
         case .custom:
-            guard customMinutesValid, let minutes = customMinutes else { return nil }
-            return Double(minutes) * 60
+            guard let minutes = customMinutes else { return nil }
+            return IntentSupport.durationS(minutes: minutes, maxRuntimeS: card.maxRuntimeS)
         }
     }
 

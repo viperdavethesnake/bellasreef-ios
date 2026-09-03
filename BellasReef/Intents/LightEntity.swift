@@ -24,6 +24,17 @@ struct LightEntity: AppEntity {
     /// `lightingCards` resolves it: the hub's `display_name`, or the raw
     /// device id when it has never been named.
     let name: String
+    /// This channel's declared `max_runtime_s`, carried because nothing below
+    /// this client enforces it: `create_override` accepts an over-runtime
+    /// hold, and hardware-io's `_runtime_deadline` then latches the channel
+    /// with no automatic path out. `holdMinutesCap` turns it into the ceiling
+    /// `HoldLightIntent` refuses past, which is the same cap the Lighting
+    /// tab's custom-duration field applies.
+    ///
+    /// Re-read on every resolution — the query always goes to the hub — so a
+    /// runtime changed on the hub is honoured without rebuilding the
+    /// shortcut.
+    let maxRuntimeS: Double?
 
     var displayRepresentation: DisplayRepresentation {
         DisplayRepresentation(title: "\(name)")
@@ -54,8 +65,15 @@ struct LightQuery: EntityStringQuery {
         try await lights()
     }
 
+    /// Matches the device id as well as the name. A channel that has never
+    /// been renamed shows its raw id as its name, and an operator who knows a
+    /// channel as `pca9685-0` should find it by typing that even after
+    /// someone has named it "Frag tank".
     func entities(matching string: String) async throws -> [LightEntity] {
-        try await lights().filter { $0.name.localizedCaseInsensitiveContains(string) }
+        try await lights().filter {
+            $0.name.localizedCaseInsensitiveContains(string)
+                || $0.id.localizedCaseInsensitiveContains(string)
+        }
     }
 
     /// Adopted `light`-role actuators, in the order the Lighting tab lists
@@ -72,7 +90,12 @@ struct LightQuery: EntityStringQuery {
             return try await client.devices()
                 .filter(isLight)
                 .sorted { $0.deviceId < $1.deviceId }
-                .map { LightEntity(id: $0.deviceId, name: $0.displayName ?? $0.deviceId) }
+                .map {
+                    LightEntity(
+                        id: $0.deviceId, name: $0.displayName ?? $0.deviceId,
+                        maxRuntimeS: $0.maxRuntimeS
+                    )
+                }
         } catch {
             throw IntentFailure.hub(HumanError.describe(error))
         }

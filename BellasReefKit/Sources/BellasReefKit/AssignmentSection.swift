@@ -70,7 +70,7 @@ public enum AssignmentSection {
     ) -> [Candidate] {
         let here = Set(schedules.first { $0.id == scheduleId }?.assignedChannels ?? [])
         return devices
-            .filter { $0.adopted == true && $0.role == "light" && !here.contains($0.deviceId) }
+            .filter { isLight($0) && !here.contains($0.deviceId) }
             .sorted { $0.deviceId < $1.deviceId }
             .map { device in
                 Candidate(
