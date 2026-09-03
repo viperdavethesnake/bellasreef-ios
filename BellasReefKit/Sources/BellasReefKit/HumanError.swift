@@ -73,6 +73,15 @@ public enum HumanError {
         if let streamError = error as? StreamClient.StreamError {
             return streamError.description
         }
+        // A body larger than the cap its caller allowed — in this app, a
+        // history export past `HubClient`'s 32 MB CSV limit. Without this the
+        // banner reads "OpenAPIRuntime.HTTPBody contains more than the maximum
+        // allowed 33554432 bytes.", which names a library and a byte count and
+        // no action, and which `looksLikeADump` does not catch because it is
+        // grammatical English.
+        if isOverBodyCap(error) {
+            return "This export is larger than the app can hold. Try a shorter range."
+        }
         if let url = error as? URLError {
             switch url.code {
             case .cannotConnectToHost:
@@ -107,6 +116,27 @@ public enum HumanError {
             return described
         }
         return "Something went wrong talking to the hub."
+    }
+
+    /// True for swift-openapi-runtime's over-the-cap error from
+    /// `Data(collecting:upTo:)`.
+    ///
+    /// Matched on its text, which is not the usual way to identify an error
+    /// and is the only way available here: the type is
+    /// `HTTPBody.TooManyBytesError`, declared `private` inside the runtime, so
+    /// it cannot be named in an `as?`. Its `description` is a fixed English
+    /// sentence with only the byte count interpolated, so the prefix is a
+    /// stable handle.
+    ///
+    /// `contains` rather than `hasPrefix` because the same error can arrive
+    /// wrapped — `UniversalClient` boxes anything a middleware throws in its
+    /// own `RuntimeError` before a call site sees it, and `String(describing:)`
+    /// of that still carries this sentence inside. A false negative just falls
+    /// through to the raw text this replaces, which is where it would have
+    /// landed anyway.
+    private static func isOverBodyCap(_ error: any Error) -> Bool {
+        String(describing: error)
+            .contains("OpenAPIRuntime.HTTPBody contains more than the maximum allowed")
     }
 
     /// True for text that reads like an `NSError` transport dump rather than

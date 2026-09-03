@@ -287,6 +287,12 @@ struct HistoryExportClientTests {
         #expect(samples?.count == 2)
         #expect(samples?[0]["value"] as? Double == 0.15)
         #expect(samples?[1]["quality"] as? String == "good")
+        // The one way the re-serialised file differs from the hub's bytes,
+        // pinned here rather than left to a doc comment: the hub sends
+        // `"quality": null`, the generated `ExportSample` uses synthesized
+        // `Encodable`, and a `nil` optional is omitted. The key is absent,
+        // not present-and-null.
+        #expect(samples?[0].keys.contains("quality") == false)
     }
 
     /// 404 is a device the registry does not have, which is a different

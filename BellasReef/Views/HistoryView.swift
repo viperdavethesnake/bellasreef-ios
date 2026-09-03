@@ -27,6 +27,14 @@ struct HistoryTabView: View {
     @State private var exportFile: ExportPayload?
     @State private var written: URL?
     @State private var exportError: String?
+    /// The in-flight export, tracked so leaving the tab can cancel it.
+    ///
+    /// Untracked, it outlived the view: an export started here and then left
+    /// would still resolve, and `exportFile` drives a `.sheet`, so the share
+    /// sheet would appear over whatever tab the operator had moved to. The
+    /// same reasoning as `HistoryModel.loadTask` — a `Task` nobody holds is a
+    /// `Task` nobody can cancel.
+    @State private var exportTask: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
@@ -99,6 +107,9 @@ struct HistoryTabView: View {
             // operator expects it to be current.
             if phase == .active { history?.reload() }
         }
+        // SwiftUI cancels this view's `.task` when the tab is switched away
+        // from; the export runs in a `Task` of its own and needs telling.
+        .onDisappear(perform: cancelExport)
     }
 
     @ViewBuilder
@@ -174,7 +185,8 @@ struct HistoryTabView: View {
         guard let client = model.client else { return }
         exporting = true
         exportError = nil
-        Task {
+        exportTask?.cancel()
+        exportTask = Task {
             defer { exporting = false }
             let end = Date()
             let start = end.addingTimeInterval(-range.duration)
@@ -182,6 +194,10 @@ struct HistoryTabView: View {
                 let file = try await client.exportHistory(
                     deviceId: deviceId, from: start, to: end, format: format
                 )
+                // A request that landed just as the operator left the tab
+                // must not go on to raise a sheet over the tab they went to.
+                // `exportHistory` does not check cancellation itself.
+                try Task.checkCancellation()
                 discardExportFile()
                 let url = FileManager.default.temporaryDirectory
                     .appending(path: file.suggestedFilename)
@@ -189,10 +205,20 @@ struct HistoryTabView: View {
                 written = url
                 exportFile = ExportPayload(url: url)
             } catch {
+                // Cancellation is our own doing — leaving the tab, or a second
+                // export superseding this one — and is not news for the
+                // operator. Same rule as `HistoryModel.load()`.
+                guard !HumanError.isCancellation(error) else { return }
                 log.error("history export failed: \(String(describing: error))")
                 exportError = HumanError.describe(error)
             }
         }
+    }
+
+    /// Drops an export nobody is waiting for any more.
+    private func cancelExport() {
+        exportTask?.cancel()
+        exportTask = nil
     }
 
     /// Deletes the temporary file once the share sheet has closed.

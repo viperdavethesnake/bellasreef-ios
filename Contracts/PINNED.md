@@ -156,8 +156,28 @@ draws.
 | `HistoryExport` | the JSON form — `device_id`, `metric`, `start`, `end`, and every stored sample |
 | `ExportSample` | one reading as written: `at`, `value`, nullable `quality`. Nothing aggregated |
 
-Additive. Nothing was removed and no existing type changed shape, so no
-fixture broke.
+Nothing was removed, and the export operation and its two schemas are purely
+additive. **One existing type did change shape**, though, and it is named here
+because the first draft of this section claimed none had:
+
+| Symbol | 4.3.0 | 4.4.0 |
+|---|---|---|
+| `AuditEvent.subject` | `"type": "string"` | `"type": ["string", "null"]` |
+
+The generated property widened from `Swift.String` to `Swift.String?`. It
+arrives with this pin but it is not the export's doing — it is backend #98
+(the TOFU / setup-code grant fix), whose contract change had not been pinned
+here until now.
+
+It broke nothing, and the reason is worth writing down rather than trusting to
+a green build: **nothing in this app reads `AuditEvent.subject`.** The audit
+log derives its subject from `device_id` and the event payload instead
+(`AuditRow.subjectId` / `AuditRow.subjectName`, called from `AuditLogView`), a
+change made back when `subject` turned out to be the constant
+`bellasreef.audit.auth` on every row. A widening to optional is source-breaking
+wherever the value is actually used, so the build stayed green only because
+that use had already been removed for unrelated reasons. Had it not been, this
+would have been a repair, not a re-pin.
 
 Two things about the operation that shape the client code, both visible in
 the spec above rather than guessed:

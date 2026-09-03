@@ -746,13 +746,23 @@ public actor HubClient {
         }
     }
 
-    /// How much of an export this device will hold in memory.
+    /// How much of a **CSV** export this device will hold in memory.
     ///
     /// The hub caps the window at 31 days; the app's widest range is 7 days,
     /// which at the 5 s sensor cadence is about 120 000 rows — some 7 MB of
     /// CSV. 32 MB leaves room for a faster cadence and still refuses, with a
     /// sentence, rather than being killed for memory while the operator
     /// watches a spinner.
+    ///
+    /// **The JSON leg is not capped by this, or by anything.** That body is
+    /// collected and decoded inside the generated client, which calls
+    /// `Data(collecting: body, upTo: .max)` (`CurrencyExtensions.swift`,
+    /// `convertJSONToBodyCodable`) before `exportHistory` sees a value at all.
+    /// Ruled: left as it is. Reaching that limit would mean hand-writing the
+    /// request to get at the raw body, which is the one thing this client does
+    /// not do, and JSON of the same window is the same order of size as the
+    /// CSV — so the practical exposure is a hub answering with far more than
+    /// the window should contain, not an operator picking 7D.
     private static let exportByteCap = 32 * 1024 * 1024
 
     /// One device's whole record for a window, as a file
@@ -766,19 +776,31 @@ public actor HubClient {
     /// declares two content types: `.csv(HTTPBody)` — bytes, streamed, which
     /// is what the hub's `StreamingResponse` sends — and
     /// `.json(HistoryExport)`, a decoded model. Which one arrives is decided
-    /// by the `format` query parameter, not by content negotiation, so the
-    /// two cases are matched to the two formats and a mismatch is a bug
-    /// rather than something to accommodate.
+    /// by the `format` query parameter and by the content type the hub then
+    /// answers with, not by negotiation.
     ///
-    /// The JSON leg therefore re-serialises the decoded model rather than
-    /// passing bytes through: the generator gives back a value, not the
-    /// response body. Nothing is lost doing it — `HistoryExport` is
-    /// `additionalProperties: false`, so there is no field the generated type
-    /// could drop — and the round trip means a hub sending something the
-    /// contract does not describe fails here instead of writing a file that
-    /// looks fine. The dates re-encode through the same transcoder the rest
-    /// of this client uses, so the file's timestamps read like every other
-    /// timestamp the hub emits.
+    /// Both cases are handled, and **neither is checked against the `format`
+    /// that was asked for.** If a hub answered `application/json` to a `csv`
+    /// request, this would return the re-serialised JSON under a `.csv` name
+    /// and `commaSeparatedText` type — a mislabelled file, not a thrown
+    /// error. Left unenforced deliberately: the endpoint picks its response
+    /// from the same parameter, so the two can only disagree if the hub is
+    /// wrong, and an assertion here would turn that into a failed export
+    /// rather than a file with the wrong extension.
+    ///
+    /// The JSON leg re-serialises the decoded model rather than passing bytes
+    /// through, because the generator gives back a value, not the response
+    /// body. The round trip means a hub sending something the contract does
+    /// not describe fails here instead of writing a file that looks fine, and
+    /// the dates re-encode through the same transcoder the rest of this client
+    /// uses, so the file's timestamps read like every other timestamp the hub
+    /// emits. It is not byte-for-byte what the hub sent, in two ways:
+    /// formatting (this is pretty-printed), and **a null `quality` is dropped
+    /// rather than written as `null`** — the generated `ExportSample` uses
+    /// synthesized `Encodable`, which omits a `nil` optional. `HistoryExport`
+    /// is `additionalProperties: false`, so nothing the hub sent is lost as
+    /// *data*; a reader that expects every sample object to carry a `quality`
+    /// key will not find one on the samples that had none.
     public func exportHistory(
         deviceId: String, from start: Date, to end: Date, format: ExportFormat
     ) async throws -> ExportedFile {
