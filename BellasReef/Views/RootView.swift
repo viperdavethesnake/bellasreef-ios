@@ -23,6 +23,22 @@ struct RootView: View {
 /// (manual holds, since the 2026-08-15 spec Feature 2 — day curves are still
 /// out of scope, see that spec's "Out of scope"), History, System.
 struct MainTabs: View {
+    @Environment(AppModel.self) private var model
+
+    /// Every hold the hub is reporting right now, off the same frames the
+    /// Tank and Lighting tabs already render from.
+    ///
+    /// Lives here rather than on the Lighting tab because a Lock Screen
+    /// banner outlives the screen that started it: the operator holds a
+    /// light, switches to Tank, and locks the phone. The two endings this
+    /// process never performs — a hold reaching its deadline, and a hold
+    /// released from another client — arrive as frames, and this is the
+    /// highest place inside the paired session where every frame is visible.
+    private var liveOverrideIds: Set<String> {
+        guard let monitor = model.monitor else { return [] }
+        return Set(monitor.channels.values.compactMap { $0.override?.id })
+    }
+
     var body: some View {
         TabView {
             Tab("Tank", systemImage: "drop.fill") {
@@ -59,5 +75,19 @@ struct MainTabs: View {
         // the only lever is not to opt in. Re-adding this modifier means
         // re-testing System-tab leaf pops, scrolled, on real iOS 26.
 
+        // A Live Activity survives the app being killed, so a relaunch finds
+        // banners this process has no handle for. Re-attach before the first
+        // reconcile, or they would sit there counting down a hold that ended.
+        .task { HoldActivityController.shared.adoptExisting() }
+        // Every frame, not only the ones that change the live-hold set. The
+        // case that most needs reconciling is a set that never changes: the
+        // app relaunches, adopts a banner for a hold that ended while it was
+        // closed, and no frame ever carries that id — so "the set changed"
+        // is an edge that would never fire. The work is a set subtraction
+        // over a handful of ids.
+        .onChange(of: model.monitor?.lastFrameAt) { _, _ in
+            let present = liveOverrideIds
+            Task { await HoldActivityController.shared.reconcile(present: present) }
+        }
     }
 }

@@ -81,6 +81,11 @@ struct ReleaseLightIntent: AppIntent, LiveActivityIntent {
         } catch {
             throw IntentFailure.hub(HumanError.describe(error))
         }
+        // The hold is gone, so its Lock Screen banner has to go too (UX
+        // review D2). Frame reconciliation would eventually catch this, but
+        // only while the app is running with a live socket — a shortcut run
+        // from a locked phone has neither.
+        await HoldActivityController.shared.end(overrideId: overrideId)
         return .result(
             dialog: IntentDialog(stringLiteral: IntentSupport.releasedDialog(light: light.name))
         )

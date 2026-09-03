@@ -19,6 +19,12 @@
 #   error.description         -- a bare error's own (usually synthesized,
 #                                 dump-shaped) CustomStringConvertible
 #
+# Scanned: every Swift source in the tree that can put words on a screen --
+# the app, the kit, the Live Activity extension, and the Shared/ sources
+# compiled into both app and extension. A new top-level source directory has
+# to be added to the `find` below; a fence that silently stops covering new
+# code is worse than no fence, because it still reports "clean".
+#
 # Exclusions, each narrow and load-bearing:
 #   - HumanError.swift itself: it is the one file allowed to look at an
 #     error's raw text, because turning it into a sentence is its entire job.
@@ -112,7 +118,7 @@ while IFS= read -r -d '' file; do
             violations=$((violations + 1))
         fi
     done < "$file"
-done < <(find BellasReef BellasReefKit -name '*.swift' -print0)
+done < <(find BellasReef BellasReefKit BellasReefActivity Shared -name '*.swift' -print0)
 
 if [[ "$marker_count" -ne "$EXPECTED_MARKERS" ]]; then
     echo "::error::no-raw-error marker count is ${marker_count}, expected ${EXPECTED_MARKERS}. Raising this is a reviewed decision — name the sanctioned line in the commit. Markers found at:" >&2

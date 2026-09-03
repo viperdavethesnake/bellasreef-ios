@@ -505,6 +505,15 @@ private struct LightingCardView: View {
             // surviving to be wrongly consulted later, after the frame goes
             // quiet again for real (the hold's natural expiry).
             if newValue != nil { optimisticHold = nil }
+            // Keep the Lock Screen banner on the hub's own account of this
+            // hold — the level it reports may differ from the one that was
+            // asked for (the 8 % floor snaps down). Matched by override id
+            // inside the controller, so a frame describing a *different*
+            // hold updates nothing; that case is a supersede, and `hold()`
+            // starts a fresh activity for it.
+            if let newValue {
+                Task { await HoldActivityController.shared.update(hold: newValue) }
+            }
         }
         // §7.4 standard destructive-confirm pattern, the same shape
         // SystemView uses for Revoke/Unadopt/Clear (ruled 2026-08-15: this
@@ -667,10 +676,16 @@ private struct LightingCardView: View {
                 // 2026-08-15) — `effectiveHold` prefers `card.hold` the
                 // moment the frame catches up, so this is only ever the
                 // gap-filler.
-                optimisticHold = LightingCard.ActiveHold(
+                let granted = LightingCard.ActiveHold(
                     id: overrideView.id, duty: overrideView.duty, expiresAt: overrideView.expiresAt,
                     transition: HubClient.HoldTransition(overrideView.transition)
                 )
+                optimisticHold = granted
+                // The same grant, on the Lock Screen (UX review D2). Started
+                // from the grant rather than the next frame for the same
+                // reason the card shows it optimistically: the banner should
+                // be there when the operator looks up from the tap.
+                await HoldActivityController.shared.start(hold: granted, light: card)
                 // Seed `releasedIDs` with whatever hold the frame currently
                 // shows, rather than clearing it (review round 2, 2026-08-15
                 // — I1): a re-hold at the SAME duty is a supersede on the
@@ -708,6 +723,7 @@ private struct LightingCardView: View {
             _ = try await client.release(overrideId: overrideId)
             optimisticHold = nil
             releasedIDs.insert(overrideId)
+            await HoldActivityController.shared.end(overrideId: overrideId)
         } catch {
             problem = .message(HumanError.describe(error))
         }
