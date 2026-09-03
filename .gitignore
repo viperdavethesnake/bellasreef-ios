@@ -9,3 +9,7 @@ DerivedData/
 *.xcuserstate
 xcuserdata/
 .swiftpm/
+
+build/
+review-shots/
+samples/
