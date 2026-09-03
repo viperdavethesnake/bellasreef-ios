@@ -112,7 +112,23 @@ struct SystemView: View {
                     }
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("system-access")
+                } footer: {
+                    Text("Devices are what the engine commands; Hardware is what the hub "
+                         + "can offer; Access is who may talk to it.")
+                }
 
+                // Ruling D1 (2026-09-02, option 2): the app says what it
+                // actually does rather than implying a push safety net.
+                // This section is a placeholder home for C5's future Alerts
+                // leaf — one line, no leaf, no link, until that's built.
+                Section("Alerts") {
+                    Text(AlertingTier.statement)
+                        .font(.footnote)
+                        .foregroundStyle(.secondary)
+                        .accessibilityIdentifier("system-alerts-tier")
+                }
+
+                Section {
                     NavigationLink {
                         AuditLogView()
                     } label: {
@@ -121,9 +137,7 @@ struct SystemView: View {
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("audit-log")
                 } footer: {
-                    Text("Devices are what the engine commands; Hardware is what the hub "
-                         + "can offer; Access is who may talk to it. The audit log is the "
-                         + "hub's append-only record of who did what.")
+                    Text("The hub's append-only record of who did what.")
                 }
 
                 Section {
