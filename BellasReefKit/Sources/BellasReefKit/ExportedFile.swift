@@ -55,6 +55,16 @@ public struct ExportedFile: Sendable, Equatable {
     /// The hub's own `Content-Disposition` name when it sent one, otherwise
     /// the identical name built locally. See `ExportFilename`.
     public let suggestedFilename: String
+    /// What this file is, declared rather than inferred.
+    ///
+    /// The History tab's presenter — `UIActivityViewController` over a file
+    /// URL — reads the type off the extension and never asks for this, so
+    /// today it is carried, not consumed. It is on the struct because a
+    /// caller that hands over bytes instead of a path (`ShareLink(item:
+    /// preview:)`, `fileExporter`) has to state the type, and because
+    /// "csv means `public.comma-separated-values-text`" is a fact about the
+    /// format that belongs beside the format, not inside whichever view
+    /// shares it next.
     public let utType: UTType
 
     public init(data: Data, suggestedFilename: String, utType: UTType) {
