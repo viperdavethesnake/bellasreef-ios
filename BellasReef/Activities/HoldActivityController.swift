@@ -127,11 +127,30 @@ final class HoldActivityController {
     }
 
     /// Take down the banner for one hold, wherever the news came from.
+    ///
+    /// A miss is re-checked against the system's own list before giving up,
+    /// because the caller is often a process that has never drawn a screen.
+    /// Both intent paths — the banner's Release button, which
+    /// `LiveActivityIntent` background-launches the app for, and a Shortcuts
+    /// or Siri release — can run without `MainTabs` ever appearing, and
+    /// `MainTabs` is the only thing that calls `adoptExisting()`. Without the
+    /// retry, `handles` is empty in exactly the case this method exists for:
+    /// the hold is released on the hub and its banner sits on the Lock Screen
+    /// counting down to nothing.
     func end(overrideId: String) async {
-        guard let entry = handles.first(
-            where: { $0.value.activity.attributes.overrideId == overrideId }
-        ) else { return }
+        if let entry = handle(showing: overrideId) {
+            await dismiss(entry.value, lightId: entry.key)
+            return
+        }
+        adoptExisting()
+        guard let entry = handle(showing: overrideId) else { return }
         await dismiss(entry.value, lightId: entry.key)
+    }
+
+    private func handle(showing overrideId: String)
+        -> (key: String, value: ActivityHandle)?
+    {
+        handles.first { $0.value.activity.attributes.overrideId == overrideId }
     }
 
     /// The hub's live-override set says which banners are over (UX review

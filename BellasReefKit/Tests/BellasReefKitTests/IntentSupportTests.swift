@@ -56,6 +56,13 @@ struct IntentSupportTests {
         #expect(holdMinutesCap(maxRuntimeS: 0) == IntentSupport.maxHoldMinutes)
         // Truncated, never rounded up: 90 s is one whole minute, not two.
         #expect(holdMinutesCap(maxRuntimeS: 90) == 1)
+        // Floored at one minute. Truncation alone gives 0 here, and a cap of
+        // 0 renders as "Enter 1–0 minutes." on the Lighting tab and
+        // "between 1 and 0 minutes." from the intent — a range with no
+        // members. The smallest hold the spec has is the honest answer; the
+        // hub is what refuses it.
+        #expect(holdMinutesCap(maxRuntimeS: 30) == IntentSupport.minHoldMinutes)
+        #expect(holdMinutesCap(maxRuntimeS: 59) == 1)
     }
 
     @Test("a hold longer than the light's own runtime is refused, not clamped")

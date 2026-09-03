@@ -244,7 +244,19 @@ public func allowedDurations(maxRuntimeS: Double?) -> [DurationPreset] {
 ///
 /// Whole-minute truncation, never rounding up: a rounded-up cap is a number
 /// the hub would refuse.
+///
+/// Floored at one minute, which is the spec's own smallest hold
+/// (`duration_s` carries `exclusiveMinimum: 0`, so one whole minute is the
+/// floor `IntentSupport.minHoldMinutes` names). Truncation alone returns 0
+/// for any runtime under a minute, and a cap of 0 is not a number this
+/// function can honestly return: every sentence built on it reads "between 1
+/// and 0 minutes" and every field seeded from it starts invalid. A
+/// sub-minute `max_runtime_s` is a device declaring that no hold this client
+/// can express fits inside it; the honest answer is the smallest hold there
+/// is, and the hub refusing it, rather than a range with no members.
 public func holdMinutesCap(maxRuntimeS: Double?) -> Int {
     guard let maxRuntimeS, maxRuntimeS > 0 else { return IntentSupport.maxHoldMinutes }
-    return min(IntentSupport.maxHoldMinutes, Int(maxRuntimeS / 60))
+    return max(
+        IntentSupport.minHoldMinutes, min(IntentSupport.maxHoldMinutes, Int(maxRuntimeS / 60))
+    )
 }

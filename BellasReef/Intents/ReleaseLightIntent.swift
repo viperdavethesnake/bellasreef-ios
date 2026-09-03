@@ -72,19 +72,14 @@ struct ReleaseLightIntent: AppIntent, LiveActivityIntent {
             )
         }
 
-        do {
-            // `.released` and `.alreadyReleased` are the same news — the hold
-            // is gone — so both say so. A 404 here just means it expired
-            // between the list and the delete.
-            _ = try await client.release(overrideId: overrideId)
-        } catch {
-            throw IntentFailure.hub(HumanError.describe(error))
-        }
-        // The hold is gone, so its Lock Screen banner has to go too (UX
-        // review D2). Frame reconciliation would eventually catch this, but
-        // only while the app is running with a live socket — a shortcut run
-        // from a locked phone has neither.
-        await HoldActivityController.shared.end(overrideId: overrideId)
+        // One release tail, shared with the Live Activity's own button:
+        // release, a human sentence if the hub refuses, and the Lock Screen
+        // banner down. That last step is not something frame reconciliation
+        // could cover for — a shortcut run from a locked phone holds no
+        // socket and may never draw a screen, which is also why
+        // `HoldActivityController.end` re-checks the system's activity list
+        // rather than trusting its in-memory handles.
+        try await HoldRelease.run(overrideId: overrideId, using: client)
         return .result(
             dialog: IntentDialog(stringLiteral: IntentSupport.releasedDialog(light: light.name))
         )

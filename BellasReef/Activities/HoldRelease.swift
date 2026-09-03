@@ -24,7 +24,21 @@ enum HoldRelease {
         guard let client = await HubClientFactory.remembered() else {
             throw IntentFailure.notPaired
         }
+        try await run(overrideId: overrideId, using: client)
+    }
+
+    /// The same tail for a caller that already has a client.
+    ///
+    /// `ReleaseLightIntent` builds one to find the light's live hold and then
+    /// releases it; handing that client straight on keeps the release tail —
+    /// release, human sentence on failure, banner down — in one place without
+    /// a second `HubClientFactory.remembered()`, which would mean a second
+    /// `token.minted` audit row for one spoken command.
+    static func run(overrideId: String, using client: HubClient) async throws {
         do {
+            // `.released` and `.alreadyReleased` are the same news, so both
+            // pass. A 404 just means the hold expired between being found
+            // and being deleted.
             _ = try await client.release(overrideId: overrideId)
         } catch {
             throw IntentFailure.hub(HumanError.describe(error))
