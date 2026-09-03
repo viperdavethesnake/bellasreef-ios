@@ -41,8 +41,9 @@ enum HoldTransitionAppEnum: String, AppEnum {
 /// (https://developer.apple.com/documentation/appintents/liveactivityintent).
 /// Without it, an intent invoked from a Live Activity's button runs in the
 /// widget extension's process, which has no access to this app's Keychain
-/// credential and so cannot talk to the hub at all. Task 3's Live Activity
-/// invokes `ReleaseLightIntent`; both conform, so the two behave alike.
+/// credential and so cannot talk to the hub at all. `ReleaseLightIntent` and
+/// `ReleaseHoldIntent` (the Live Activity's own Release button) conform for
+/// the same reason; all three behave alike.
 struct HoldLightIntent: AppIntent, LiveActivityIntent {
     static var title: LocalizedStringResource { "Hold Light" }
 

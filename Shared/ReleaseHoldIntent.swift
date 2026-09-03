@@ -55,9 +55,38 @@ struct ReleaseHoldIntent: AppIntent, LiveActivityIntent {
     }
 
     func perform() async throws -> some IntentResult {
-        #if BELLASREEF_APP
-        try await HoldRelease.run(overrideId: overrideId)
-        #endif
+        try await release()
         return .result()
     }
+
+    /// The half that differs between the two targets, split out so
+    /// `perform()` keeps one unconditional return for its opaque result type
+    /// and the extension's branch can be a bare `throw`.
+    private func release() async throws {
+        #if BELLASREEF_APP
+        try await HoldRelease.run(overrideId: overrideId)
+        #else
+        // Unreachable by design, and loud rather than silent if the design
+        // is ever wrong. `LiveActivityIntent` performs in the app process,
+        // so this branch is compiled into the extension and never run — but
+        // succeeding quietly here would mean a Release tap that reports
+        // success and releases nothing, which is the single worst way this
+        // feature could fail. Refusing puts a sentence in front of the
+        // operator instead.
+        throw ReleaseHoldFailure.wrongProcess
+        #endif
+    }
 }
+
+#if !BELLASREEF_APP
+/// The extension's copy of `ReleaseHoldIntent.perform()` has no hub client
+/// and no credential, so the only honest thing it can do is refuse. See
+/// there for why it is never expected to run.
+enum ReleaseHoldFailure: Error, CustomLocalizedStringResourceConvertible {
+    case wrongProcess
+
+    var localizedStringResource: LocalizedStringResource {
+        "Bella's Reef could not reach the hub from the Lock Screen. Open the app and release the hold there."
+    }
+}
+#endif

@@ -26,9 +26,12 @@ struct HoldActivityAttributes: ActivityAttributes {
     /// What can change while one hold is live: the level the hub reports for
     /// it, and its deadline.
     ///
-    /// `percent` is whole percent, already through the hub's own 8 % floor
-    /// (`Dimming.snapPercent` on the app side) — a banner reading "5%" beside
-    /// a dark fixture is the same lie the Lighting tab was fixed for.
+    /// `percent` is whole percent, and it is the level the *fixture* is at,
+    /// not the level that was commanded: the app builds it with
+    /// `Dimming.snappedPercent`, which applies the hub's 8 % floor before
+    /// rounding, so a hold commanded at 5 % arrives here as 0. A banner
+    /// reading "5%" beside a dark fixture is the same lie the Lighting tab
+    /// was fixed for.
     struct ContentState: Codable, Hashable {
         var percent: Int
         var expiresAt: Date

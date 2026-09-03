@@ -78,4 +78,29 @@ struct DimmingTests {
         #expect(Dimming.floorFootnote ==
                 "Below 8% this dimmer is off — points under 8% run at 0%.")
     }
+
+    // MARK: What the fixture is at, vs what was commanded
+
+    @Test("snapped percent reports the level the hub will actually drive")
+    func snappedPercentAppliesTheFloor() {
+        #expect(Dimming.snappedPercent(0.5) == 50)
+        #expect(Dimming.snappedPercent(1.0) == 100)
+        // Commanded 5%, driven 0 — the case the Live Activity banner exists
+        // not to lie about.
+        #expect(Dimming.snappedPercent(0.05) == 0)
+        // A commanded 0 is hard off, and is the declared safe state.
+        #expect(Dimming.snappedPercent(0.0) == 0)
+        // The floor itself is usable, not snapped away.
+        #expect(Dimming.snappedPercent(0.08) == 8)
+    }
+
+    /// Snap the exact duty, then round — never the other way round. 0.079 is
+    /// under the hub's floor and is therefore dark; rounding it to 8 % first
+    /// would carry it over the floor and print a level the meter disagrees
+    /// with. `percent`, which only rounds, is the contrast.
+    @Test("snapping happens before rounding, not after")
+    func snappedPercentOrdersSnapBeforeRound() {
+        #expect(Dimming.snappedPercent(0.079) == 0)
+        #expect(Dimming.percent(0.079) == 8)
+    }
 }

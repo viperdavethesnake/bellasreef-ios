@@ -45,6 +45,29 @@ public enum Dimming {
         Int((duty * 100).rounded())
     }
 
+    /// A commanded duty as the whole percent the *fixture* will actually sit
+    /// at: the hub's floor applied, then rounded.
+    ///
+    /// `percent` reports the command; this reports the result. They differ
+    /// only under the floor, which is exactly the band where echoing the
+    /// command prints a number a meter disagrees with — a hold commanded at
+    /// 5 % is dark (`snapPercent`, proven end to end at Stage 2).
+    ///
+    /// The order is the whole reason this is a named function rather than two
+    /// calls at a call site. Snap the exact duty first and round after:
+    /// rounding 7.9 % up to 8 and snapping that would carry it over the floor
+    /// and print 8 % for a channel the hub is holding at 0.
+    ///
+    /// For surfaces where the app speaks for the hardware rather than echoing
+    /// the command — the Live Activity banner (UX review D2), the same choice
+    /// `IntentSupport.heldDialog` already makes for a spoken answer. The
+    /// Lighting card and the Tank equipment row keep `percent(hold.duty)`:
+    /// there the operator is looking at the hold they placed, with the slider
+    /// that placed it and the floor's own caption right beside it.
+    public static func snappedPercent(_ duty: Double) -> Int {
+        Int(snapPercent(duty * 100).rounded())
+    }
+
     /// Below this gap between reported and target duty, a slew in progress
     /// reads as arrived rather than as still catching up.
     public static let convergenceThreshold: Double = 0.01

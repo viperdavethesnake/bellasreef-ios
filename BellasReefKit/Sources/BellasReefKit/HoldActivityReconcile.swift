@@ -29,12 +29,52 @@ public enum HoldActivityReconcile {
     /// somebody else's hold, and D2 is a banner for the holds this operator
     /// placed here, not a mirror of the hub's whole override table.
     ///
-    /// The caller decides which of its activities are eligible to be judged.
-    /// A hold granted a moment ago is genuinely absent from `present` until
-    /// the next frame arrives, so ending on that absence would take the
-    /// banner down before it was ever seen — `HoldActivityController` holds a
-    /// new activity back from this comparison until it has had time to appear.
+    /// Which activities are eligible to be judged this way is `eligible`'s
+    /// question, not this one's — `started` is expected to have been filtered
+    /// already.
     public static func endedIds(started: Set<String>, present: Set<String>) -> Set<String> {
         started.subtracting(present)
+    }
+
+    /// How long an activity is held back from `endedIds` after this client
+    /// starts showing it.
+    ///
+    /// A hold is granted over REST and only *then* published as a state
+    /// frame, so for a beat the hub's live-override set genuinely does not
+    /// contain an id the banner is already showing. Thirty seconds is well
+    /// past the observed frame latency (the engine publishes on the
+    /// command's own tick, and the hub replays each actuator's last state on
+    /// connect) and well short of the shortest hold this app will place, one
+    /// minute.
+    public static let reconcileGrace: TimeInterval = 30
+
+    /// May this activity be compared against the frames yet?
+    ///
+    /// Two gates, and both of them exist because ending a banner for a hold
+    /// that is still live is the worst thing this feature can do: the
+    /// operator's tank is held at a level and the phone says it is not.
+    ///
+    /// **`sawStateFrame`** — has any `.state` frame been applied at all. The
+    /// override ids come from state frames, so before the first one arrives
+    /// the "live holds" set is empty for want of information, not because
+    /// nothing is held. The stream also emits `.ready`, `.sensor` and
+    /// `.alert` frames, and a caller watching "did a frame arrive" rather
+    /// than "did an actuator speak" would reconcile against that empty set
+    /// on the very first `.ready`. On a socket slower to come up than
+    /// `grace`, that alone would end every banner adopted at launch.
+    ///
+    /// **`grace`** — has this activity been showing long enough for the frame
+    /// that should carry it to have been published. See `reconcileGrace`.
+    ///
+    /// The cost of both gates is that a hold released elsewhere in the first
+    /// thirty seconds keeps its banner a little longer. The cost of not
+    /// having them is a banner that never appears, or one that disappears
+    /// while the light is held.
+    public static func eligible(
+        startedAt: Date, now: Date, sawStateFrame: Bool,
+        grace: TimeInterval = reconcileGrace
+    ) -> Bool {
+        guard sawStateFrame else { return false }
+        return now.timeIntervalSince(startedAt) >= grace
     }
 }

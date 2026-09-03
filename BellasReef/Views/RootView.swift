@@ -39,6 +39,23 @@ struct MainTabs: View {
         return Set(monitor.channels.values.compactMap { $0.override?.id })
     }
 
+    /// Has any actuator spoken yet on this connection?
+    ///
+    /// `channels` is written only by a `.state` frame, so an empty one means
+    /// no actuator has reported — which is not the same as "no light is
+    /// held", and `liveOverrideIds` cannot tell the two apart on its own.
+    /// The distinction matters because the stream also carries `.ready`,
+    /// `.sensor` and `.alert` frames: reconciling on frame arrival alone
+    /// would judge every banner against an empty set on the first `.ready`.
+    ///
+    /// Chosen over "`connection` became `.live`" because `.ready` sets that
+    /// too, before any actuator state has arrived — it is the same gap one
+    /// step earlier. This asks the question the reconciliation actually
+    /// depends on: have the frames that carry override ids started arriving.
+    private var sawStateFrame: Bool {
+        !(model.monitor?.channels.isEmpty ?? true)
+    }
+
     var body: some View {
         TabView {
             Tab("Tank", systemImage: "drop.fill") {
@@ -87,7 +104,12 @@ struct MainTabs: View {
         // over a handful of ids.
         .onChange(of: model.monitor?.lastFrameAt) { _, _ in
             let present = liveOverrideIds
-            Task { await HoldActivityController.shared.reconcile(present: present) }
+            let sawState = sawStateFrame
+            Task {
+                await HoldActivityController.shared.reconcile(
+                    present: present, sawStateFrame: sawState
+                )
+            }
         }
     }
 }

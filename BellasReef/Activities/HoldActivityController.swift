@@ -46,24 +46,6 @@ final class HoldActivityController {
     /// When each activity was requested, for the grace window below.
     private var startedAt: [String: Date] = [:]
 
-    /// How long a fresh activity is exempt from frame reconciliation.
-    ///
-    /// A hold is granted over REST and only *then* published as a state
-    /// frame, so for a beat the hub's live-override set genuinely does not
-    /// contain an id this client is already showing. The same gap opens at
-    /// launch, wider: an adopted banner is judged against whatever frames
-    /// have arrived, and at launch that is none. Ending on either absence
-    /// would take a banner down for a hold that is live. Thirty seconds is
-    /// well past the observed frame latency (the engine publishes on the
-    /// command's own tick, and the hub replays each actuator's last state on
-    /// connect) and well short of the shortest hold this app will place (one
-    /// minute).
-    ///
-    /// The cost of the window is that a hold released elsewhere inside the
-    /// first thirty seconds keeps its banner a little longer. The cost of not
-    /// having it is a banner that never appears at all.
-    private static let reconcileGrace: TimeInterval = 30
-
     private var enabled: Bool { ActivityAuthorizationInfo().areActivitiesEnabled }
 
     private init() {}
@@ -81,8 +63,9 @@ final class HoldActivityController {
             // Adopted, not exempt: the grace window is about how long the
             // *stream* needs to speak, not how old the hold is. At launch
             // nothing has arrived yet, so judging an adopted banner
-            // immediately would end every one of them against an empty
-            // frame set before the socket had even connected.
+            // immediately would end every one of them against an empty frame
+            // set. (The state-frame gate in `reconcile` is the stronger half
+            // of that protection; this is the belt to its braces.)
             //
             // Only for a light this instance is not already tracking: this
             // runs whenever the paired session's tabs appear, and an
@@ -156,13 +139,17 @@ final class HoldActivityController {
     /// pass through this process, and the stream is the only thing that
     /// knows.
     ///
-    /// `present` is every override id currently carried on a state frame.
-    func reconcile(present: Set<String>) async {
+    /// `present` is every override id currently carried on a state frame, and
+    /// `sawStateFrame` says whether any state frame has arrived at all —
+    /// without it, an empty `present` means "nothing has spoken yet", not
+    /// "nothing is held", and the two must not be confused. Both gates, and
+    /// why they exist, are `HoldActivityReconcile.eligible`.
+    func reconcile(present: Set<String>, sawStateFrame: Bool) async {
         let now = Date()
-        // Only judge activities old enough to have been published. See
-        // `reconcileGrace`.
         let judged = handles.filter { lightId, _ in
-            now.timeIntervalSince(startedAt[lightId] ?? now) >= Self.reconcileGrace
+            HoldActivityReconcile.eligible(
+                startedAt: startedAt[lightId] ?? now, now: now, sawStateFrame: sawStateFrame
+            )
         }
         let started = Set(judged.values.map { $0.activity.attributes.overrideId })
         for overrideId in HoldActivityReconcile.endedIds(started: started, present: present) {
@@ -192,7 +179,13 @@ final class HoldActivityController {
     {
         ActivityContent(
             state: HoldActivityAttributes.ContentState(
-                percent: Dimming.percent(hold.duty), expiresAt: hold.expiresAt
+                // The level the fixture will be at, not the one commanded:
+                // the hub snaps anything under 8 % to 0 before it reaches the
+                // pin, so a hold commanded at 5 % is dark and the banner says
+                // 0 %. `Dimming.snappedPercent` is that rule, and it is a
+                // named function because the order matters (snap the exact
+                // duty, then round).
+                percent: Dimming.snappedPercent(hold.duty), expiresAt: hold.expiresAt
             ),
             staleDate: hold.expiresAt
         )

@@ -18,12 +18,17 @@ import Foundation
 /// no owner), so releasing here ends whichever hold is live, whoever placed
 /// it — the same unconditional Release the Lighting card offers.
 ///
-/// `LiveActivityIntent` for the reason Task 3 needs it: the protocol makes
-/// the system "launch the app process in the background to perform the
-/// action" (https://developer.apple.com/documentation/appintents/liveactivityintent),
-/// so a Release button on a Live Activity runs `perform()` here, next to the
-/// Keychain credential, instead of inside the widget extension where there is
-/// none.
+/// `LiveActivityIntent` because the protocol makes the system "launch the app
+/// process in the background to perform the action"
+/// (https://developer.apple.com/documentation/appintents/liveactivityintent),
+/// which is what puts `perform()` next to the Keychain credential when
+/// Shortcuts or Siri fires it from a locked phone.
+///
+/// The Live Activity's own Release button does **not** run this intent — it
+/// runs `ReleaseHoldIntent` (`Shared/`), which is handed the exact override
+/// id off the banner it was drawn on and needs no `LightEntity`, and so no
+/// kit dependency in the widget extension. This one is the Shortcuts-facing
+/// action, and it has to find the live hold itself.
 struct ReleaseLightIntent: AppIntent, LiveActivityIntent {
     static var title: LocalizedStringResource { "Release Light" }
 
@@ -44,12 +49,6 @@ struct ReleaseLightIntent: AppIntent, LiveActivityIntent {
     }
 
     init() {}
-
-    /// Task 3's Live Activity builds this with the light already chosen, so
-    /// its Release button needs no parameter resolution at tap time.
-    init(light: LightEntity) {
-        self.light = light
-    }
 
     func perform() async throws -> some IntentResult & ProvidesDialog {
         guard let client = await HubClientFactory.remembered() else {

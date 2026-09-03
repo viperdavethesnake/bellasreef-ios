@@ -1,5 +1,6 @@
 // Bella's Reef iOS — closed source.
 
+import Foundation
 import Testing
 
 @testable import BellasReefKit
@@ -56,5 +57,76 @@ struct HoldActivityReconcileTests {
     @Test("nothing started, nothing ends")
     func empty() {
         #expect(HoldActivityReconcile.endedIds(started: [], present: []) == [])
+    }
+
+    // MARK: Eligibility — which activities may be judged at all
+
+    private static let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+
+    @Test("the grace window is thirty seconds")
+    func graceIsThirtySeconds() {
+        #expect(HoldActivityReconcile.reconcileGrace == 30)
+    }
+
+    @Test("an activity younger than the grace window is not judged")
+    func insideTheGrace() {
+        #expect(
+            HoldActivityReconcile.eligible(
+                startedAt: Self.t0, now: Self.t0, sawStateFrame: true
+            ) == false
+        )
+        #expect(
+            HoldActivityReconcile.eligible(
+                startedAt: Self.t0, now: Self.t0.addingTimeInterval(29.9), sawStateFrame: true
+            ) == false
+        )
+    }
+
+    /// The boundary itself is eligible. Named because "is it >= or >" is
+    /// exactly the kind of thing a later edit flips.
+    @Test("at exactly the grace window it is judged")
+    func atTheBoundary() {
+        #expect(
+            HoldActivityReconcile.eligible(
+                startedAt: Self.t0, now: Self.t0.addingTimeInterval(30), sawStateFrame: true
+            )
+        )
+    }
+
+    @Test("past the grace window it is judged")
+    func pastTheGrace() {
+        #expect(
+            HoldActivityReconcile.eligible(
+                startedAt: Self.t0, now: Self.t0.addingTimeInterval(3600), sawStateFrame: true
+            )
+        )
+    }
+
+    /// The bug this gate exists for: the stream emits `.ready` and `.sensor`
+    /// frames before any actuator has spoken, so an activity adopted at
+    /// launch on a slow socket would be judged against an empty live-hold
+    /// set and its banner ended while the light is still held.
+    @Test("no state frame yet means nothing is judged, however old")
+    func noStateFrameBlocksEverything() {
+        #expect(
+            HoldActivityReconcile.eligible(
+                startedAt: Self.t0, now: Self.t0.addingTimeInterval(86_400), sawStateFrame: false
+            ) == false
+        )
+        #expect(
+            HoldActivityReconcile.eligible(
+                startedAt: .distantPast, now: Self.t0, sawStateFrame: false
+            ) == false
+        )
+    }
+
+    @Test("the grace window can be overridden by a caller that needs a different one")
+    func customGrace() {
+        #expect(
+            HoldActivityReconcile.eligible(
+                startedAt: Self.t0, now: Self.t0.addingTimeInterval(5), sawStateFrame: true,
+                grace: 1
+            )
+        )
     }
 }
