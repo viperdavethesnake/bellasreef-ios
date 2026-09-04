@@ -12,19 +12,27 @@ private let anyHub = Hub(
 
 private func json(_ text: String) -> Data { Data(text.utf8) }
 
-/// Request bodies by operation id, so a test can assert what went on the wire.
-/// A lock-protected class rather than an actor: `[String: Any]` is not
-/// Sendable, so it must not cross an actor boundary (same idiom as
-/// `CapturedBody` in AdoptionTests).
+/// Request bodies and paths by operation id, so a test can assert what went on
+/// the wire. A lock-protected class rather than an actor: `[String: Any]` is
+/// not Sendable, so it must not cross an actor boundary (same idiom as
+/// `CapturedBody` in AdoptionTests). The paths matter because rename, unbind
+/// and forget carry their target in the URL, not in a body.
 private final class Bodies: @unchecked Sendable {
     private let lock = NSLock()
     private var byOperation: [String: [Data]] = [:]
-    func record(_ operation: String, _ body: Data) {
-        lock.withLock { byOperation[operation, default: []].append(body) }
+    private var pathsByOperation: [String: [String]] = [:]
+    func record(_ operation: String, _ body: Data, path: String?) {
+        lock.withLock {
+            byOperation[operation, default: []].append(body)
+            pathsByOperation[operation, default: []].append(path ?? "")
+        }
     }
     func last(_ operation: String) -> [String: Any]? {
         guard let data = lock.withLock({ byOperation[operation]?.last }), !data.isEmpty else { return nil }
         return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
+    }
+    func lastPath(_ operation: String) -> String? {
+        lock.withLock { pathsByOperation[operation]?.last }
     }
 }
 
@@ -35,12 +43,51 @@ private final class CannedFrames: StateFrameSource {
     var held: Components.Schemas.StateFrame?
     var next: Components.Schemas.StateFrame?
     private(set) var askedFloor: Date??
-    func heldFrame(for deviceId: String) -> Components.Schemas.StateFrame? { held }
+    /// The id the wait asked about, and every id the floor was read for, so a
+    /// test can prove the flow followed the hub's id rather than the proposed
+    /// one.
+    private(set) var askedId: String?
+    private(set) var heldAskedIds: [String] = []
+    func heldFrame(for deviceId: String) -> Components.Schemas.StateFrame? {
+        heldAskedIds.append(deviceId)
+        return held
+    }
     func nextFrame(
         for deviceId: String, newerThan floor: Date?, timeout: Duration
     ) async -> Components.Schemas.StateFrame? {
+        askedId = deviceId
         askedFloor = .some(floor)
         return next
+    }
+}
+
+/// Stops one call mid-flight so a test can act underneath it: the stub calls
+/// `arrive()` and parks there, the test waits for the arrival, does its thing,
+/// then `release()`s. Same shape as `Started` in HistoryModelTests, with the
+/// release half added.
+private actor Gate {
+    private var arrived = false
+    private var released = false
+    private var arrivalWaiter: CheckedContinuation<Void, Never>?
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func arrive() async {
+        arrived = true
+        arrivalWaiter?.resume()
+        arrivalWaiter = nil
+        if released { return }
+        await withCheckedContinuation { releaseWaiter = $0 }
+    }
+
+    func waitForArrival() async {
+        if arrived { return }
+        await withCheckedContinuation { arrivalWaiter = $0 }
+    }
+
+    func release() {
+        released = true
+        releaseWaiter?.resume()
+        releaseWaiter = nil
     }
 }
 
@@ -60,22 +107,29 @@ private func stateFrame(emittedAt: String) throws -> Components.Schemas.StateFra
 
 private let boundCreated = #"{"device_id":"pca9685-3","created":true,"driver_type":"pca9685","channel":"3"}"#
 private let boundMatched = #"{"device_id":"pca9685-3","created":false,"driver_type":"pca9685","channel":"3"}"#
+/// The hub matched an existing row for this channel and kept its id, which is
+/// not the id the sheet proposed. `Store.bind_device` matches on
+/// (driver_type, channel), so this is the ordinary re-adopt case.
+private let boundElsewhere = #"{"device_id":"left-fixture","created":false,"driver_type":"pca9685","channel":"3"}"#
 private let granted = #"{"id":"6f1c2a4e-0000-4000-8000-000000000001","target":"pca9685-3","duty":0.5,"expires_at":"2026-09-04T18:00:05Z","expires_in_s":5.0,"transition":"snap"}"#
 private let renamed = #"{"device_id":"pca9685-3","display_name":"Left fixture"}"#
 
 /// A hub that answers every call the flow can make; `overrideStatus` lets one
-/// test refuse the pulse.
+/// test refuse the pulse, and `beforeBind` lets one test hold the bind open
+/// long enough to cancel underneath it.
 private func hub(
-    log: CallLog, bodies: Bodies, bind: String, overrideStatus: Int = 200
+    log: CallLog, bodies: Bodies, bind: String, overrideStatus: Int = 200,
+    beforeBind: (@Sendable () async -> Void)? = nil
 ) -> HubClient {
     HubClient(
         hub: anyHub, tokens: MemoryCredentials(token: "refresh"),
-        transport: StubTransport { operation, _, body in
+        transport: StubTransport { operation, request, body in
             if operation == "mintToken" {
                 return (200, json(#"{"access_token":"jwt","expires_in":900}"#))
             }
             await log.record(operation)
-            bodies.record(operation, body)
+            bodies.record(operation, body, path: request.path)
+            if operation == "bindDevice", let beforeBind { await beforeBind() }
             switch operation {
             case "bindDevice": return (200, json(bind))
             case "createOverride": return (overrideStatus, overrideStatus == 200 ? json(granted) : nil)
@@ -154,6 +208,78 @@ struct IdentifyFlowTests {
         await flow.settle()
         #expect(frames.askedFloor == .some(old.payload.emittedAt))
         #expect(flow.created == false)
+    }
+
+    @Test("the bind's device id is what the wait, the pulse and the rename target")
+    func hubDeviceIdWinsOnTheHappyPath() async throws {
+        let log = CallLog(), bodies = Bodies()
+        let frames = CannedFrames()
+        frames.next = try stateFrame(emittedAt: "2026-09-04T17:00:20.000000Z")
+        let flow = makeFlow(hub(log: log, bodies: bodies, bind: boundElsewhere), frames: frames)
+
+        _ = try await flow.start()
+        await flow.settle()
+        #expect(flow.deviceId == "left-fixture", "the hub matched a row that keeps its own id")
+        #expect(flow.phase == .answer)
+        // Waiting on the proposed id would wait for a frame that never comes:
+        // the rebuild publishes under the id the registry holds.
+        #expect(frames.askedId == "left-fixture")
+        #expect(frames.heldAskedIds == ["pca9685-3", "left-fixture"], "the floor is re-read for the real id")
+        #expect(bodies.last("createOverride")?["target"] as? String == "left-fixture")
+
+        flow.chooseToName()
+        await flow.name("Left fixture")
+        #expect(flow.phase == .named)
+        #expect(bodies.lastPath("renameDevice") == "/api/v1/devices/left-fixture")
+    }
+
+    @Test("the bind's device id is what Not this one unbinds")
+    func hubDeviceIdWinsOnLeave() async throws {
+        let log = CallLog(), bodies = Bodies()
+        let frames = CannedFrames()
+        frames.next = try stateFrame(emittedAt: "2026-09-04T17:00:20.000000Z")
+        let flow = makeFlow(hub(log: log, bodies: bodies, bind: boundElsewhere), frames: frames)
+
+        _ = try await flow.start()
+        await flow.settle()
+        flow.leave()
+        await flow.settle()
+        // Unbinding the proposed id 404s into .alreadyUnbound, which reads as
+        // success: the phase would say .left while the rejected channel stayed
+        // adopted.
+        #expect(flow.phase == .left)
+        #expect(bodies.lastPath("unbindDevice") == "/api/v1/devices/left-fixture")
+        #expect(await log.count(of: "forgetDevice") == 0, "created: false; the row predates this flow")
+    }
+
+    @Test("a cancel during the bind unbinds once the bind lands, and never pulses")
+    func leaveDuringTheBind() async throws {
+        let log = CallLog(), bodies = Bodies()
+        let frames = CannedFrames()
+        frames.next = try stateFrame(emittedAt: "2026-09-04T17:00:20.000000Z")
+        let gate = Gate()
+        let flow = makeFlow(
+            hub(
+                log: log, bodies: bodies, bind: boundCreated,
+                beforeBind: { await gate.arrive() }
+            ),
+            frames: frames
+        )
+
+        let started = Task { try await flow.start() }
+        await gate.waitForArrival()
+        // Cancel with the bind still in flight: `running` is nil here, so the
+        // flow has to remember the intent rather than act on an id and a
+        // created flag it does not have yet.
+        flow.leave()
+        await gate.release()
+        _ = try await started.value
+        await flow.settle()
+
+        #expect(flow.phase == .left)
+        #expect(await log.count(of: "createOverride") == 0, "cancel means nobody is watching the tank")
+        #expect(await log.count(of: "unbindDevice") == 1, "the row must not stay adopted after Cancel")
+        #expect(await log.count(of: "forgetDevice") == 1, "this flow created the row")
     }
 
     @Test("pulse again repeats the override without another bind")

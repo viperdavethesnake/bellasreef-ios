@@ -54,7 +54,14 @@ public final class IdentifyFlow {
     /// From the bind. false means the hub matched a detached row that already
     /// carried a name and history; Not this one must not forget that row.
     public private(set) var created: Bool?
-    public let deviceId: String
+    /// The id every later call targets. Seeded from the proposed id, then
+    /// replaced by the one the bind returned. `Store.bind_device` matches on
+    /// (driver_type, channel) and hands back the existing row's id whatever
+    /// the caller proposed, so a channel adopted under another id in an
+    /// earlier session comes back under that id. Waiting, pulsing, renaming
+    /// and unbinding against the proposed id would wait for a frame that
+    /// never arrives, hold the wrong device, and unbind nothing.
+    public private(set) var deviceId: String
     /// "PWM ch n", the number the tapped row shows.
     public let channelLabel: String
 
@@ -66,6 +73,14 @@ public final class IdentifyFlow {
     private var floor: Date?
     private var activeHoldId: String?
     private var running: Task<Void, Never>?
+    /// True only while `client.bind` is in flight. `running` is nil then (the
+    /// bind is awaited on the caller's task), so `leave()` cannot tell "no
+    /// background step" from "the bind has not landed yet" without this.
+    private var binding = false
+    /// Set by a `leave()` that arrived while the bind was in flight. `start()`
+    /// performs the leave once the bind lands, with the real device id and the
+    /// created flag in hand.
+    private var abandoned = false
 
     public init(
         client: HubClient,
@@ -73,7 +88,7 @@ public final class IdentifyFlow {
         request: Components.Schemas.BindDeviceRequest,
         channel: String,
         rebuildTimeout: Duration = IdentifyFlow.rebuildTimeout,
-        pulseSettle: Duration = .seconds(5)
+        pulseSettle: Duration = .seconds(IdentifyFlow.pulseDurationS)
     ) {
         precondition(request.displayName == nil, "identify adopts nameless; the name comes last")
         self.client = client
@@ -92,19 +107,43 @@ public final class IdentifyFlow {
         floor = frames.heldFrame(for: deviceId)?.payload.emittedAt
         phase = .adopting
         let outcome: HubClient.BindOutcome
+        binding = true
         do {
             outcome = try await client.bind(request)
         } catch {
+            binding = false
+            // Nothing was adopted, so there is nothing for a pending leave to
+            // undo; the sheet is back on its normal sections.
+            abandoned = false
             phase = .choose
             throw error
         }
-        guard case let .bound(_, created) = outcome else {
+        binding = false
+        guard case let .bound(id, created) = outcome else {
+            abandoned = false
             phase = .choose
             return outcome
         }
+        // The hub's id, not the proposed one: see `deviceId`.
+        if id != deviceId {
+            deviceId = id
+            // The floor above was read for the proposed id, which is not the
+            // id the frames arrive under. Re-read it: the rebuild is seconds
+            // away, so anything held for this id right now is the retained
+            // frame from its previous life, which is exactly the floor a
+            // fresh startup frame has to clear.
+            floor = frames.heldFrame(for: id)?.payload.emittedAt
+        }
         adopted = true
         self.created = created
-        run { await self.waitThenPulse() }
+        if abandoned {
+            // Cancel was tapped while the bind was in flight. Undo it now,
+            // rather than pulsing a channel nobody is watching.
+            abandoned = false
+            run { await self.unbindAndMaybeForget() }
+        } else {
+            run { await self.waitThenPulse() }
+        }
         return outcome
     }
 
@@ -129,6 +168,13 @@ public final class IdentifyFlow {
     /// Not this one, and Cancel while adopting. Ends a hold still inside its
     /// five seconds, unbinds, and forgets only a row this flow created.
     public func leave() {
+        if binding {
+            // The bind has not landed, so there is no id to unbind and no
+            // created flag to guard the forget with. Record the intent;
+            // start() carries it out the moment the bind returns.
+            abandoned = true
+            return
+        }
         running?.cancel()
         run { await self.unbindAndMaybeForget() }
     }
@@ -156,6 +202,10 @@ public final class IdentifyFlow {
     var hasActiveHold: Bool { activeHoldId != nil }
 
     private func run(_ step: @escaping @MainActor () async -> Void) {
+        // One background step at a time. Without this, a double tap on Pulse
+        // again drops the first task on the floor while it is still running
+        // and posts a second override behind it.
+        running?.cancel()
         running = Task { await step() }
     }
 
