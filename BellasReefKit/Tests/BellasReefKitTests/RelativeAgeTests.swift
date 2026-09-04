@@ -37,4 +37,19 @@ struct RelativeAgeTests {
             #expect(!said.hasPrefix("in "), "\(said) is future-phrased")
         }
     }
+
+    @Test("the contracted form drops the tense and nothing else")
+    func compactUnits() {
+        // "Hub unreachable · 4m" — the strip's own words carry the tense.
+        #expect(RelativeAge.compact(from: now, now: now) == "0s")
+        #expect(RelativeAge.compact(from: now.addingTimeInterval(-30), now: now) == "30s")
+        #expect(RelativeAge.compact(from: now.addingTimeInterval(-260), now: now) == "4m")
+        #expect(RelativeAge.compact(from: now.addingTimeInterval(-7200), now: now) == "2h")
+        #expect(RelativeAge.compact(from: now.addingTimeInterval(-172_800), now: now) == "2d")
+    }
+
+    @Test("the contracted form clamps the future too")
+    func compactFutureIsClamped() {
+        #expect(RelativeAge.compact(from: now.addingTimeInterval(3), now: now) == "0s")
+    }
 }

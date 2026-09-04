@@ -24,6 +24,13 @@ struct RootView: View {
 /// out of scope, see that spec's "Out of scope"), History, System.
 struct MainTabs: View {
     @Environment(AppModel.self) private var model
+    /// Held here rather than left inside the TabView. The accessory below is
+    /// installed conditionally, and a modifier that comes and goes rebuilds
+    /// the tab view; an external binding is what stops the strip appearing
+    /// mid-session from bouncing the operator back to Tank.
+    @State private var selection: TabID = .tank
+
+    private enum TabID: Hashable { case tank, lighting, history, system }
 
     /// Every hold the hub is reporting right now, off the same frames the
     /// Tank and Lighting tabs already render from.
@@ -56,18 +63,78 @@ struct MainTabs: View {
         !(model.monitor?.channels.isEmpty ?? true)
     }
 
+    /// Whether there is anything to say at all. Time-independent — only the
+    /// adopted-sensor count hides the strip and no clock changes that — so
+    /// this needs no ticking of its own; `StatusStripView` runs the clock that
+    /// keeps the *words* current.
+    private var strip: StatusStripState {
+        StatusStrip.state(
+            monitor: model.monitor, preferred: model.preferences?.primarySensorId
+        )
+    }
+
     var body: some View {
-        TabView {
-            Tab("Tank", systemImage: "drop.fill") {
+        // The one accessory (UX review B3): connection and staleness on every
+        // tab, not just Tank. Native chrome — the strip draws a glyph and a
+        // line and lets the accessory bring the material.
+        //
+        // Conditional modifier rather than empty accessory content, which was
+        // the first attempt: measured on the simulator 2026-09-03, an accessory
+        // whose content renders nothing still draws its own capsule, so "no
+        // sensor adopted hides the strip" has to mean not installing it.
+        Group {
+            if strip == .hidden {
+                tabs
+            } else {
+                tabs.tabViewBottomAccessory {
+                    StatusStripView(
+                        monitor: model.monitor,
+                        primarySensorId: model.preferences?.primarySensorId,
+                        unit: model.preferences?.temperatureUnit ?? .automatic
+                    )
+                }
+            }
+        }
+        // The Live Activity wiring hangs off the Group, outside the branch, on
+        // purpose: installing or removing the accessory swaps one branch for
+        // the other, and a `.task` attached inside would be torn down and
+        // re-run at every swap — `adoptExisting()` once per appearance of the
+        // strip, and a fresh `onChange` baseline each time. Out here the two
+        // modifiers see one view for the life of the session.
+        //
+        // A Live Activity survives the app being killed, so a relaunch finds
+        // banners this process has no handle for. Re-attach before the first
+        // reconcile, or they would sit there counting down a hold that ended.
+        .task { HoldActivityController.shared.adoptExisting() }
+        // Every frame, not only the ones that change the live-hold set. The
+        // case that most needs reconciling is a set that never changes: the
+        // app relaunches, adopts a banner for a hold that ended while it was
+        // closed, and no frame ever carries that id — so "the set changed"
+        // is an edge that would never fire. The work is a set subtraction
+        // over a handful of ids.
+        .onChange(of: model.monitor?.lastFrameAt) { _, _ in
+            let present = liveOverrideIds
+            let sawState = sawStateFrame
+            Task {
+                await HoldActivityController.shared.reconcile(
+                    present: present, sawStateFrame: sawState
+                )
+            }
+        }
+    }
+
+    private var tabs: some View {
+        TabView(selection: $selection) {
+            Tab("Tank", systemImage: "drop.fill", value: TabID.tank) {
                 TankView()
             }
-            Tab("Lighting", systemImage: "lightbulb.fill") {
+            Tab("Lighting", systemImage: "lightbulb.fill", value: TabID.lighting) {
                 LightingView()
             }
-            Tab("History", systemImage: "chart.bar.fill") {
+            Tab("History", systemImage: "chart.bar.fill", value: TabID.history) {
                 HistoryTabView()
             }
-            Tab("System", systemImage: "gearshape") {
+            Tab("System", systemImage: "gearshape", value: TabID.system) {
                 SystemView()
             }
         }
@@ -91,25 +158,5 @@ struct MainTabs: View {
         // it is the minimize observation itself, which is Apple's code, so
         // the only lever is not to opt in. Re-adding this modifier means
         // re-testing System-tab leaf pops, scrolled, on real iOS 26.
-
-        // A Live Activity survives the app being killed, so a relaunch finds
-        // banners this process has no handle for. Re-attach before the first
-        // reconcile, or they would sit there counting down a hold that ended.
-        .task { HoldActivityController.shared.adoptExisting() }
-        // Every frame, not only the ones that change the live-hold set. The
-        // case that most needs reconciling is a set that never changes: the
-        // app relaunches, adopts a banner for a hold that ended while it was
-        // closed, and no frame ever carries that id — so "the set changed"
-        // is an edge that would never fire. The work is a set subtraction
-        // over a handful of ids.
-        .onChange(of: model.monitor?.lastFrameAt) { _, _ in
-            let present = liveOverrideIds
-            let sawState = sawStateFrame
-            Task {
-                await HoldActivityController.shared.reconcile(
-                    present: present, sawStateFrame: sawState
-                )
-            }
-        }
     }
 }
