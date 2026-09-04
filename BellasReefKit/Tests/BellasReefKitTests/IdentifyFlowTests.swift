@@ -96,11 +96,12 @@ private func request() -> Components.Schemas.BindDeviceRequest {
 @Suite("Identify flow (C4)")
 struct IdentifyFlowTests {
     private func makeFlow(
-        _ client: HubClient, frames: CannedFrames, timeout: Duration = .seconds(1)
+        _ client: HubClient, frames: CannedFrames, timeout: Duration = .seconds(1),
+        pulseSettle: Duration = .milliseconds(1)
     ) -> IdentifyFlow {
         IdentifyFlow(
             client: client, frames: frames, request: request(), channel: "3",
-            rebuildTimeout: timeout, pulseSettle: .milliseconds(1)
+            rebuildTimeout: timeout, pulseSettle: pulseSettle
         )
     }
 
@@ -197,6 +198,38 @@ struct IdentifyFlowTests {
         await flow.settle()
         #expect(flow.phase == .left)
         #expect(await log.operations.suffix(2) == ["unbindDevice", "forgetDevice"])
+    }
+
+    @Test("not this one while the pulse is live releases the hold, then unbinds and forgets")
+    func notThisOneDuringPulse() async throws {
+        let log = CallLog(), bodies = Bodies()
+        let frames = CannedFrames()
+        frames.next = try stateFrame(emittedAt: "2026-09-04T17:00:20.000000Z")
+        // A pulseSettle long enough that leave() lands while the hold is
+        // still up: the running task is parked in the granted branch's
+        // sleep, not yet at .answer.
+        let flow = makeFlow(
+            hub(log: log, bodies: bodies, bind: boundCreated), frames: frames,
+            pulseSettle: .seconds(30)
+        )
+        _ = try await flow.start()
+        // Not `phase == .pulsing`: that flips the instant pulse() starts,
+        // before the hold has actually landed. Poll the finer signal so
+        // leave() races a genuinely active hold, not one still in flight.
+        var spins = 0
+        while !flow.hasActiveHold {
+            await Task.yield()
+            spins += 1
+            if spins > 100_000 {
+                Issue.record("the hold never landed; phase is \(flow.phase)")
+                return
+            }
+        }
+        flow.leave()
+        await flow.settle()
+        #expect(flow.phase == .left, "the cancelled pulse must not leak a .failed phase over leave()'s .left")
+        #expect(await log.count(of: "releaseOverride") == 1)
+        #expect(await log.operations.suffix(3) == ["releaseOverride", "unbindDevice", "forgetDevice"])
     }
 
     @Test("an untrusted clock fails the pulse and leaves the adoption standing")

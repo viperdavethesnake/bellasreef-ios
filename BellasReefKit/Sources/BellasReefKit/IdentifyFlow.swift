@@ -148,6 +148,13 @@ public final class IdentifyFlow {
         await running?.value
     }
 
+    // Internal, not private: `.pulsing` covers both "the hold was requested"
+    // and "the hold landed and is sleeping out its duration" — a test that
+    // wants leave() to land on a genuinely live hold (to exercise the
+    // release-then-unbind path, not merely a hold still in flight) needs a
+    // signal finer than `phase`.
+    var hasActiveHold: Bool { activeHoldId != nil }
+
     private func run(_ step: @escaping @MainActor () async -> Void) {
         running = Task { await step() }
     }
@@ -169,10 +176,17 @@ public final class IdentifyFlow {
     private func pulse() async {
         phase = .pulsing
         do {
-            switch try await client.hold(
+            let outcome = try await client.hold(
                 target: deviceId, duty: Self.pulseDuty, durationS: Self.pulseDurationS,
                 reason: "identify", transition: .snap
-            ) {
+            )
+            // leave() cancels this task and starts unbindAndMaybeForget()
+            // concurrently; a hold() that resolves (granted or refused)
+            // after that race must not overwrite the .left it is about to
+            // write. Guard every phase write below the await, matching the
+            // .granted branch's existing post-sleep check.
+            if Task.isCancelled { return }
+            switch outcome {
             case let .granted(view):
                 activeHoldId = view.id
                 // The server expires the hold; this only paces the sheet to
@@ -190,6 +204,10 @@ public final class IdentifyFlow {
                 phase = .failed(reason: "The hub refused the pulse on this channel.", retry: .pulse)
             }
         } catch {
+            // Same race, from the throwing side: a cancelled in-flight call
+            // can surface as a generic transport error well after leave()
+            // has already moved the flow to .left.
+            if Task.isCancelled { return }
             phase = .failed(reason: HumanError.describe(error), retry: .pulse)
         }
     }
