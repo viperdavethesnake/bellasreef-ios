@@ -62,26 +62,23 @@ private final class CannedFrames: StateFrameSource {
 }
 
 /// Stops one call mid-flight so a test can act underneath it: the stub calls
-/// `arrive()` and parks there, the test waits for the arrival, does its thing,
+/// `arrive()` and parks there, the test polls `hasArrived`, does its thing,
 /// then `release()`s. Same shape as `Started` in HistoryModelTests, with the
-/// release half added.
+/// release half added. Arrival is polled rather than awaited on a
+/// continuation so the caller can bound its own wait: a regression that
+/// throws before ever reaching the gated call must fail the suite, not hang
+/// it. Same idiom as the `hasActiveHold` spin below.
 private actor Gate {
     private var arrived = false
     private var released = false
-    private var arrivalWaiter: CheckedContinuation<Void, Never>?
     private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    var hasArrived: Bool { arrived }
 
     func arrive() async {
         arrived = true
-        arrivalWaiter?.resume()
-        arrivalWaiter = nil
         if released { return }
         await withCheckedContinuation { releaseWaiter = $0 }
-    }
-
-    func waitForArrival() async {
-        if arrived { return }
-        await withCheckedContinuation { arrivalWaiter = $0 }
     }
 
     func release() {
@@ -267,7 +264,19 @@ struct IdentifyFlowTests {
         )
 
         let started = Task { try await flow.start() }
-        await gate.waitForArrival()
+        // Bounded: if a regression stops the bind ever reaching the stub, this
+        // has to fail the suite rather than park it forever.
+        var spins = 0
+        while await gate.hasArrived == false {
+            await Task.yield()
+            spins += 1
+            if spins > 100_000 {
+                Issue.record("the bind never reached the stub; phase is \(flow.phase)")
+                started.cancel()
+                await gate.release()
+                return
+            }
+        }
         // Cancel with the bind still in flight: `running` is nil here, so the
         // flow has to remember the intent rather than act on an id and a
         // created flag it does not have yet.

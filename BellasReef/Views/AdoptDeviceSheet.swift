@@ -81,7 +81,14 @@ struct AdoptDeviceSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        guard let identify, identify.adopted,
+                        // Deliberately not gated on `adopted`. That is false
+                        // for the whole bind window, and the flow outlives
+                        // this sheet: it is retained by the task running
+                        // startIdentify(), so a plain dismiss there would
+                        // adopt, wait and pulse a channel whose sheet is
+                        // gone. leave() records the intent and the flow
+                        // unbinds the moment the bind lands.
+                        guard let identify,
                               identify.phase != .named, identify.phase != .left
                         else {
                             dismiss()
