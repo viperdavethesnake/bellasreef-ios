@@ -19,8 +19,16 @@ public enum StatusStripState: Equatable, Sendable {
     /// the wire unit — conversion stays at the render edge like everywhere
     /// else (`TemperatureDisplay`).
     case live(reading: Double)
-    /// Connected, and the primary probe has stopped saying anything.
-    case stale
+    /// Connected, and the primary probe is not saying anything.
+    ///
+    /// `everReported` separates the two silences, because the Tank tab has
+    /// two sentences for them and a strip that sits under it must not
+    /// contradict it: `false` is a probe that has not spoken yet this session
+    /// ("Waiting for a sensor"), `true` is one that has stopped ("No data for
+    /// a minute"). One case rather than two, because the strip treats them
+    /// identically in every other way - same tone, same glyph, same rank -
+    /// and a fourth state was ruled out.
+    case stale(everReported: Bool)
     /// The socket is down. `since` is the last frame of any kind, `nil` when
     /// this session never had one.
     case unreachable(since: Date?)
@@ -62,9 +70,12 @@ public enum StatusStrip {
     ///    connection state is unreachable, including `.connecting`: a reading
     ///    is current or the socket is, and this strip must never be the reason
     ///    a stale number looks fresh.
-    /// 3. A probe with nothing to say is amber and reads as no data —
-    ///    a fault, or an adopted sensor that has not reported. Which of the
-    ///    two is the Tank tab's job, not a one-line strip's.
+    /// 3. A probe with nothing to say is amber whether it has never spoken or
+    ///    has stopped, and on a dead socket both read as the dead socket. The
+    ///    two silences differ only in words, and there the strip takes the
+    ///    Tank tab's: "Waiting for a sensor" before the first frame, "No data
+    ///    for a minute" after. A fault counts as having reported and reads as
+    ///    no data; *which* fault is the Tank tab's job, not a strip's.
     public static func state(
         connection: TankMonitor.Connection,
         probe: TankMonitor.Probe,
@@ -73,12 +84,14 @@ public enum StatusStrip {
         adoptedSensorCount: Int?
     ) -> StatusStripState {
         if adoptedSensorCount == 0 { return .hidden }
+        guard connection == .live else { return .unreachable(since: lastFrameAt) }
         switch probe {
-        case .waiting, .faulted:
-            return connection == .live ? .stale : .unreachable(since: lastFrameAt)
+        case .waiting:
+            return .stale(everReported: false)
+        case .faulted:
+            return .stale(everReported: true)
         case let .reading(celsius, _, _):
-            guard connection == .live else { return .unreachable(since: lastFrameAt) }
-            return isStale ? .stale : .live(reading: celsius)
+            return isStale ? .stale(everReported: true) : .live(reading: celsius)
         }
     }
 
@@ -152,11 +165,13 @@ extension StatusStripState {
         switch self {
         case let .live(celsius):
             return "\(reading(celsius, unit: unit, locale: locale)) · live"
-        case .stale:
-            // The Tank tab's own wording for the same condition
-            // (`TankMonitor.statusLine`). Two phrasings for one state on two
-            // screens is how an operator learns to distrust both.
-            return "No data for a minute"
+        case let .stale(everReported):
+            // Both sentences are `TankMonitor.statusLine`'s, for the same two
+            // conditions it distinguishes. Two phrasings for one state on two
+            // screens is how an operator learns to distrust both - and the
+            // two screens are visible at once, since the Tank tab carries a
+            // status line under this strip.
+            return everReported ? "No data for a minute" : "Waiting for a sensor"
         case let .unreachable(since):
             guard let since else { return "Hub unreachable" }
             return "Hub unreachable · \(RelativeAge.compact(from: since, now: now))"
@@ -174,7 +189,7 @@ extension StatusStripState {
     ) -> String? {
         switch self {
         case let .live(celsius): reading(celsius, unit: unit, locale: locale)
-        case .stale: "No data"
+        case let .stale(everReported): everReported ? "No data" : "Waiting"
         case .unreachable: "Hub unreachable"
         case .hidden: nil
         }
@@ -190,8 +205,8 @@ extension StatusStripState {
         switch self {
         case let .live(celsius):
             return "Hub live. \(TemperatureDisplay.spoken(celsius: celsius, as: unit, locale: locale))"
-        case .stale:
-            return "No data for a minute."
+        case let .stale(everReported):
+            return everReported ? "No data for a minute." : "Waiting for a sensor."
         case let .unreachable(since):
             guard let since else { return "Hub unreachable." }
             return "Hub unreachable. Last data \(RelativeAge.describe(from: since, now: now))."

@@ -42,7 +42,7 @@ struct StatusStripTests {
             connection: .live, probe: reading(90), isStale: true, lastFrameAt: now,
             adoptedSensorCount: 1
         )
-        #expect(state == .stale)
+        #expect(state == .stale(everReported: true))
     }
 
     @Test("a faulted probe on a live socket is amber, not a reading")
@@ -54,7 +54,7 @@ struct StatusStripTests {
             lastFrameAt: now,
             adoptedSensorCount: 1
         )
-        #expect(state == .stale)
+        #expect(state == .stale(everReported: true))
     }
 
     @Test("no frame ever, hub unreachable, one sensor adopted: unreachable, not hidden")
@@ -141,7 +141,7 @@ struct StatusStripTests {
             connection: .live, probe: reading(90), isStale: true, lastFrameAt: now,
             adoptedSensorCount: 1
         )
-        #expect(state == .stale)
+        #expect(state == .stale(everReported: true))
 
         state = StatusStrip.state(
             connection: .disconnected("could not reach the hub"),
@@ -167,13 +167,36 @@ struct StatusStripTests {
         #expect(state.compactText(unit: .fahrenheit, locale: en) == "78.7 °F")
     }
 
-    @Test("stale borrows the Tank tab's own wording for the same condition")
+    @Test("a probe that stopped borrows the Tank tab's own wording for that")
     func staleCopy() {
         // Two phrasings of one state on two screens is how an operator learns
-        // to distrust both. This is `TankMonitor.statusLine`'s sentence.
-        #expect(StatusStripState.stale.text(unit: .fahrenheit, locale: en, now: now)
+        // to distrust both. This is `TankMonitor.statusLine`'s sentence for a
+        // probe that has reported and gone quiet; `waitingCopy` covers its
+        // other one, for a probe that has not reported at all.
+        #expect(StatusStripState.stale(everReported: true).text(unit: .fahrenheit, locale: en, now: now)
             == "No data for a minute")
-        #expect(StatusStripState.stale.compactText(unit: .fahrenheit, locale: en) == "No data")
+        #expect(StatusStripState.stale(everReported: true).compactText(unit: .fahrenheit, locale: en) == "No data")
+    }
+
+    @Test("a probe that has not reported yet borrows the Tank tab's other sentence")
+    func waitingCopy() {
+        // Derived, not constructed, because the bug this covers was in the
+        // derivation: a probe that has never reported was routed to the same
+        // copy as one that has stopped. Two seconds after launch the strip
+        // said "No data for a minute" under a Tank status line reading
+        // "Waiting for a sensor", which is the exact disagreement the stale
+        // sentence was borrowed from `TankMonitor.statusLine` to avoid.
+        let state = StatusStrip.state(
+            connection: .live, probe: .waiting, isStale: false, lastFrameAt: now,
+            adoptedSensorCount: 1
+        )
+        #expect(state.text(unit: .fahrenheit, locale: en, now: now) == "Waiting for a sensor")
+        #expect(state.compactText(unit: .fahrenheit, locale: en) == "Waiting")
+        #expect(state.spokenLabel(unit: .fahrenheit, locale: en, now: now)
+            == "Waiting for a sensor.")
+        // Still one of the three states, still amber, still the triangle.
+        #expect(state.tone == .attention)
+        #expect(state.symbolName == "exclamationmark.triangle.fill")
     }
 
     @Test("unreachable carries the age of the last frame")
@@ -204,7 +227,8 @@ struct StatusStripTests {
         // The largest accessibility size on the narrowest phone is the case the
         // fallback exists for; it may drop the number, never the meaning.
         let states: [StatusStripState] = [
-            .live(reading: celsius), .stale, .unreachable(since: now.addingTimeInterval(-260)),
+            .live(reading: celsius), .stale(everReported: true),
+            .stale(everReported: false), .unreachable(since: now.addingTimeInterval(-260)),
         ]
         for state in states {
             let full = state.text(unit: .fahrenheit, locale: en, now: now)!
@@ -221,14 +245,14 @@ struct StatusStripTests {
         // Red means safety and nothing else (Theme): a lost socket is not a
         // safety event and must never light the strip red.
         #expect(StatusStripState.live(reading: celsius).tone == .allClear)
-        #expect(StatusStripState.stale.tone == .attention)
+        #expect(StatusStripState.stale(everReported: true).tone == .attention)
         #expect(StatusStripState.unreachable(since: now).tone == .attention)
     }
 
     @Test("a dot for live, a triangle for the rest")
     func symbols() {
         #expect(StatusStripState.live(reading: celsius).symbolName == "circle.fill")
-        #expect(StatusStripState.stale.symbolName == "exclamationmark.triangle.fill")
+        #expect(StatusStripState.stale(everReported: true).symbolName == "exclamationmark.triangle.fill")
         #expect(StatusStripState.unreachable(since: now).symbolName
             == "exclamationmark.triangle.fill")
     }
@@ -237,7 +261,7 @@ struct StatusStripTests {
     func spoken() {
         #expect(StatusStripState.live(reading: celsius).spokenLabel(unit: .fahrenheit, locale: en, now: now)
             == "Hub live. 78.7 degrees Fahrenheit")
-        #expect(StatusStripState.stale.spokenLabel(unit: .fahrenheit, locale: en, now: now)
+        #expect(StatusStripState.stale(everReported: true).spokenLabel(unit: .fahrenheit, locale: en, now: now)
             == "No data for a minute.")
         #expect(StatusStripState.unreachable(since: now.addingTimeInterval(-260))
             .spokenLabel(unit: .fahrenheit, locale: en, now: now)
@@ -346,7 +370,7 @@ struct StatusStripFromMonitorTests {
         #expect(StatusStrip.state(monitor: m, preferred: nil, now: observed.addingTimeInterval(59))
             == .live(reading: 23.812))
         #expect(StatusStrip.state(monitor: m, preferred: nil, now: observed.addingTimeInterval(61))
-            == .stale)
+            == .stale(everReported: true))
     }
 
     @Test("a faulted probe reads amber, never its last good number")
@@ -354,6 +378,6 @@ struct StatusStripFromMonitorTests {
         let m = try monitor()
         m.apply(try StreamClient(baseURL: hub.baseURL).decode(Fixtures.sensor))
         m.apply(try StreamClient(baseURL: hub.baseURL).decode(Fixtures.faulted))
-        #expect(StatusStrip.state(monitor: m, preferred: nil, now: observed) == .stale)
+        #expect(StatusStrip.state(monitor: m, preferred: nil, now: observed) == .stale(everReported: true))
     }
 }
