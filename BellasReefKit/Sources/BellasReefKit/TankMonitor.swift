@@ -528,7 +528,12 @@ extension TankMonitor: StateFrameSource {
             let first = await group.next() ?? nil
             group.cancelAll()
             continuation.finish()
-            return first
+            // The timeout child can win the race against a frame that has
+            // already been applied: `apply(_:)` writes `channels` and serves
+            // the waiter, and the sleep can fire in the same instant. The
+            // frame is in `channels` either way, so check there before
+            // reporting a timeout.
+            return first ?? channels[deviceId].flatMap { Self.clears($0, floor) ? $0 : nil }
         }
     }
 }
