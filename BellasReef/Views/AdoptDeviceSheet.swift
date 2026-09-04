@@ -81,11 +81,23 @@ struct AdoptDeviceSheet: View {
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") {
-                        if let identify, identify.adopted, identify.phase != .named, identify.phase != .left {
-                            identify.leave()
-                        } else {
+                        guard let identify, identify.adopted,
+                              identify.phase != .named, identify.phase != .left
+                        else {
                             dismiss()
+                            return
                         }
+                        // A failed step is the hub not answering, so leave()
+                        // has nothing to unbind with and Cancel would stick.
+                        // Close the sheet and let the adopted row stand: it
+                        // shows in the Hardware section, renameable and
+                        // unadoptable from there.
+                        if case .failed = identify.phase {
+                            onAdopted()
+                            dismiss()
+                            return
+                        }
+                        identify.leave()
                     }
                     .accessibilityIdentifier("adopt-sheet-cancel-button")
                 }
@@ -135,13 +147,19 @@ struct AdoptDeviceSheet: View {
             case .named, .left:
                 onAdopted()
                 dismiss()
+            case .adopting:
+                AccessibilityNotification.Announcement(
+                    "Adopting the channel. The hub restarts to pick it up, about 15 seconds."
+                ).post()
             case .pulsing:
                 AccessibilityNotification.Announcement("Pulsing \(identify?.channelLabel ?? "the channel")").post()
             case .answer:
                 AccessibilityNotification.Announcement("Pulse finished. Did the right fixture light up?").post()
+            case .naming:
+                AccessibilityNotification.Announcement("Name the device.").post()
             case let .failed(reason, _):
                 AccessibilityNotification.Announcement(reason).post()
-            case .choose, .adopting, .naming:
+            case .choose:
                 break
             }
         }
@@ -251,6 +269,7 @@ struct AdoptDeviceSheet: View {
                     ProgressView()
                 }
                 Button("Cancel", role: .destructive) { flow.leave() }
+                    .frame(minHeight: 44)
                     .accessibilityIdentifier("identify-cancel-button")
             }
         case .pulsing:
@@ -298,7 +317,19 @@ struct AdoptDeviceSheet: View {
                 Button("Retry") { flow.retry() }
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("identify-retry-button")
-                if step != .leave {
+                if step == .leave {
+                    // The unbind itself failed, so Retry is the only way back
+                    // to the hub and every other control here would call it
+                    // again. This is the way out that does not need the hub:
+                    // the channel stays adopted and shows in the Hardware
+                    // section, where it can be renamed or unadopted later.
+                    Button("Leave it adopted") {
+                        onAdopted()
+                        dismiss()
+                    }
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("identify-leave-adopted-button")
+                } else {
                     Button("Not this one", role: .destructive) { flow.leave() }
                         .frame(minHeight: 44)
                         .accessibilityIdentifier("identify-no-button")
