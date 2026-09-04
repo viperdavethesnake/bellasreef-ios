@@ -24,7 +24,8 @@ public enum StatusStripState: Equatable, Sendable {
     /// The socket is down. `since` is the last frame of any kind, `nil` when
     /// this session never had one.
     case unreachable(since: Date?)
-    /// Nothing to say, so the accessory does not appear at all.
+    /// No sensor is adopted, so there is nothing to be silent about and the
+    /// accessory does not appear at all.
     case hidden
 }
 
@@ -32,33 +33,48 @@ public enum StatusStripState: Equatable, Sendable {
 public enum StatusStrip {
 
     /// The same inputs the Tank tab reads: the socket, the primary probe, the
-    /// monitor's own staleness verdict for that probe, and when the last frame
-    /// of any kind arrived.
+    /// monitor's own staleness verdict for that probe, when the last frame of
+    /// any kind arrived, and how many sensors the registry says are adopted.
+    ///
+    /// Two entry points rather than one `state(from:)` over a bundle of
+    /// inputs, deliberately. This one is pure and takes five values that have
+    /// nothing in common but the screen they end on, so a single unlabelled
+    /// `from:` would hide which is which at the call site and buy nothing but
+    /// a shorter name; the other is `@MainActor` and reads a live monitor.
+    /// They are the same rule seen from two sides — a test hands it a world,
+    /// the app hands it the monitor — and that is what the shared base name
+    /// with distinct labels says.
     ///
     /// Order of precedence, and why:
     ///
-    /// 1. **A probe that has never reported hides the strip.** Not "hub
-    ///    unreachable" — a hub with no adopted sensor is a configuration, not
-    ///    a fault (the same rule `TankMonitor.tone` follows for `.allClear`),
-    ///    and a lighting-only hub must not carry a permanent amber strip.
-    ///    The cost is that a hub which is down *before* the first reading of a
-    ///    session shows nothing; the Tank tab still says so in full.
+    /// 1. **No sensor adopted hides the strip.** A lighting-only hub is a
+    ///    configuration, not a fault (the same rule `TankMonitor.tone` follows
+    ///    for `.allClear`), and it must not carry a permanent strip in either
+    ///    colour. `adoptedSensorCount` is the registry's count, `nil` while
+    ///    the registry has not loaded — and `nil` does **not** hide. The case
+    ///    that most needs the strip is a hub we cannot reach, which is also
+    ///    the case where the count can never arrive, so silence-on-unknown
+    ///    would silence exactly the fault B3 exists to report. That was the
+    ///    prototype's rule ("no probe has ever reported"), and the controller
+    ///    ruled it out on 2026-09-03: a cold launch against a dead hub shows
+    ///    the amber strip on every tab.
     /// 2. **Only a live socket may claim a live reading.** Every other
     ///    connection state is unreachable, including `.connecting`: a reading
     ///    is current or the socket is, and this strip must never be the reason
     ///    a stale number looks fresh.
-    /// 3. A fault is amber and reads as no data, because that is what it is —
-    ///    the sensor detail is the Tank tab's job, not a one-line strip's.
+    /// 3. A probe with nothing to say is amber and reads as no data —
+    ///    a fault, or an adopted sensor that has not reported. Which of the
+    ///    two is the Tank tab's job, not a one-line strip's.
     public static func state(
         connection: TankMonitor.Connection,
         probe: TankMonitor.Probe,
         isStale: Bool,
-        lastFrameAt: Date?
+        lastFrameAt: Date?,
+        adoptedSensorCount: Int?
     ) -> StatusStripState {
+        if adoptedSensorCount == 0 { return .hidden }
         switch probe {
-        case .waiting:
-            return .hidden
-        case .faulted:
+        case .waiting, .faulted:
             return connection == .live ? .stale : .unreachable(since: lastFrameAt)
         case let .reading(celsius, _, _):
             guard connection == .live else { return .unreachable(since: lastFrameAt) }
@@ -76,6 +92,11 @@ public enum StatusStrip {
     /// `preferred` is the operator's chosen probe; the first reporting one
     /// stands in when nothing is chosen, which is the Tank tab's own rule, so
     /// the strip and the hero can never be about different thermometers.
+    ///
+    /// The adopted count comes off the monitor rather than the catalog for the
+    /// same reason the monitor's own status line takes it that way: the app
+    /// wires one closure at pairing (`AppModel`, which excludes detached rows),
+    /// and every reader of that number gets the one the Tank tab is using.
     @MainActor
     public static func state(
         monitor: TankMonitor?,
@@ -93,7 +114,8 @@ public enum StatusStrip {
             connection: monitor.connection,
             probe: monitor.probe(id),
             isStale: monitor.isStale(id, now: now),
-            lastFrameAt: monitor.lastFrameAt
+            lastFrameAt: monitor.lastFrameAt,
+            adoptedSensorCount: monitor.adoptedSensorCount()
         )
     }
 }

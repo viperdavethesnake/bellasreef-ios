@@ -5,10 +5,10 @@ import SwiftUI
 
 /// The B3 status strip: the hub's pulse, carried on every tab.
 ///
-/// PROTOTYPE (branch `proto/status-strip`). David ruled on 2026-09-02 for
-/// option 1 of the B3 brainstorm — three states, teal/amber, no taps, no menu,
-/// and no glass beyond what `tabViewBottomAccessory` gives for free — built on
-/// a branch so the look can be judged on a screen rather than in prose.
+/// David ruled on 2026-09-02 for option 1 of the B3 brainstorm — three states,
+/// teal/amber, no taps, no menu, and no glass beyond what
+/// `tabViewBottomAccessory` gives for free — and approved the look on
+/// 2026-09-03 off simulator captures.
 ///
 /// The view is deliberately thin: `StatusStrip.state` decides what is true and
 /// `StatusStripState` owns the copy, both in the Kit and both tested. What is
@@ -19,8 +19,6 @@ struct StatusStripView: View {
     /// The operator's chosen probe, when there is one.
     var primarySensorId: String?
     var unit: TemperatureUnitPreference = .automatic
-    /// Previews and the capture harness pin a state; the app never does.
-    var pinned: StatusStripState?
 
     @ScaledMetric(relativeTo: .subheadline) private var dotSize: CGFloat = 7
 
@@ -41,7 +39,7 @@ struct StatusStripView: View {
     /// reads too, so the accessory's existence and its contents can never come
     /// from two different answers.
     private func state(now: Date) -> StatusStripState {
-        pinned ?? StatusStrip.state(monitor: monitor, preferred: primarySensorId, now: now)
+        StatusStrip.state(monitor: monitor, preferred: primarySensorId, now: now)
     }
 
     @ViewBuilder
@@ -89,58 +87,3 @@ struct StatusStripView: View {
         }
     }
 }
-
-/// Prototype scaffolding, and nothing else.
-///
-/// `-proto-strip live|stale|unreachable|hidden` pins the strip so all three
-/// states can be captured in the simulator with no hub in the loop — the
-/// screenshot is the deliverable David rules from, and two of the three states
-/// otherwise need a hub to be stopped. Debug-only, the same way
-/// `-uitest-reset-pairing` is: a release build has no such argument, so nothing
-/// a shipped binary can be handed will pin the strip to a state the hub is not
-/// in. It goes when the harness goes.
-enum StatusStripDemo {
-    static var requested: StatusStripState? {
-        #if DEBUG
-        let args = ProcessInfo.processInfo.arguments
-        guard let flag = args.firstIndex(of: "-proto-strip"), flag + 1 < args.count else {
-            return nil
-        }
-        switch args[flag + 1] {
-        case "live": return .live(reading: 25.9444)  // 78.7 °F
-        case "stale": return .stale
-        case "unreachable": return .unreachable(since: Date().addingTimeInterval(-260))
-        case "hidden": return .hidden
-        default: return nil
-        }
-        #else
-        return nil
-        #endif
-    }
-}
-
-#if DEBUG
-/// The strip in its own tab bar, so a preview shows the real accessory rather
-/// than a floating `HStack`.
-private struct StripPreview: View {
-    let state: StatusStripState
-
-    var body: some View {
-        TabView {
-            Tab("Tank", systemImage: "drop.fill") { Color.clear.reefBackground() }
-            Tab("Lighting", systemImage: "lightbulb.fill") { Color.clear.reefBackground() }
-            Tab("History", systemImage: "chart.bar.fill") { Color.clear.reefBackground() }
-            Tab("System", systemImage: "gearshape") { Color.clear.reefBackground() }
-        }
-        .tabViewBottomAccessory { StatusStripView(pinned: state) }
-        .tint(Theme.accent)
-    }
-}
-
-#Preview("live") { StripPreview(state: .live(reading: 25.9444)) }
-#Preview("stale") { StripPreview(state: .stale) }
-#Preview("unreachable") {
-    StripPreview(state: .unreachable(since: Date().addingTimeInterval(-260)))
-}
-#Preview("hidden") { StripPreview(state: .hidden) }
-#endif

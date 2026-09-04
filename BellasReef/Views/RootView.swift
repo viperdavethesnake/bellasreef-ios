@@ -8,25 +8,14 @@ struct RootView: View {
 
     var body: some View {
         Group {
-            // Prototype only (B3): `-proto-strip <state>` pins the status strip
-            // and skips pairing, so all three states can be captured in the
-            // simulator with no hub in the loop. DEBUG-gated in
-            // `StatusStripDemo`; it goes when the prototype does.
-            if let demo = StatusStripDemo.requested {
-                MainTabs(demoState: demo)
-            } else {
-                switch model.phase {
-                case .choosingHub:
-                    PairingFlow()
-                case .paired:
-                    MainTabs()
-                }
+            switch model.phase {
+            case .choosingHub:
+                PairingFlow()
+            case .paired:
+                MainTabs()
             }
         }
-        .task {
-            guard StatusStripDemo.requested == nil else { return }
-            await model.restore(lastHub: HubMemory.recall())
-        }
+        .task { await model.restore(lastHub: HubMemory.recall()) }
     }
 }
 
@@ -35,23 +24,13 @@ struct RootView: View {
 /// out of scope, see that spec's "Out of scope"), History, System.
 struct MainTabs: View {
     @Environment(AppModel.self) private var model
-    /// Prototype capture only — nil in every other path.
-    var demoState: StatusStripState?
     /// Held here rather than left inside the TabView. The accessory below is
     /// installed conditionally, and a modifier that comes and goes rebuilds
-    /// the tab view; an external binding is what stops the first reading of a
-    /// session from bouncing the operator back to Tank.
-    @State private var selection: TabID
+    /// the tab view; an external binding is what stops the strip appearing
+    /// mid-session from bouncing the operator back to Tank.
+    @State private var selection: TabID = .tank
 
     private enum TabID: Hashable { case tank, lighting, history, system }
-
-    /// The capture harness opens on System rather than Tank, because a strip on
-    /// the Tank tab proves nothing — that tab already carries a status line.
-    /// B3 is about the three tabs where a dead hub used to look healthy.
-    init(demoState: StatusStripState? = nil) {
-        self.demoState = demoState
-        _selection = State(initialValue: demoState == nil ? .tank : .system)
-    }
 
     /// Every hold the hub is reporting right now, off the same frames the
     /// Tank and Lighting tabs already render from.
@@ -84,25 +63,25 @@ struct MainTabs: View {
         !(model.monitor?.channels.isEmpty ?? true)
     }
 
-    /// Whether there is anything to say at all. Time-independent — a probe
-    /// that has never reported hides the strip and no clock changes that — so
+    /// Whether there is anything to say at all. Time-independent — only the
+    /// adopted-sensor count hides the strip and no clock changes that — so
     /// this needs no ticking of its own; `StatusStripView` runs the clock that
     /// keeps the *words* current.
     private var strip: StatusStripState {
-        demoState ?? StatusStrip.state(
+        StatusStrip.state(
             monitor: model.monitor, preferred: model.preferences?.primarySensorId
         )
     }
 
     var body: some View {
-        // The one accessory (UX review B3, prototype): connection and staleness
-        // on every tab, not just Tank. Native chrome — the strip draws a glyph
-        // and a line and lets the accessory bring the material.
+        // The one accessory (UX review B3): connection and staleness on every
+        // tab, not just Tank. Native chrome — the strip draws a glyph and a
+        // line and lets the accessory bring the material.
         //
         // Conditional modifier rather than empty accessory content, which was
         // the first attempt: measured on the simulator 2026-09-03, an accessory
         // whose content renders nothing still draws its own capsule, so "no
-        // probe adopted hides the strip" has to mean not installing it.
+        // sensor adopted hides the strip" has to mean not installing it.
         Group {
             if strip == .hidden {
                 tabs
@@ -111,8 +90,7 @@ struct MainTabs: View {
                     StatusStripView(
                         monitor: model.monitor,
                         primarySensorId: model.preferences?.primarySensorId,
-                        unit: model.preferences?.temperatureUnit ?? .automatic,
-                        pinned: demoState
+                        unit: model.preferences?.temperatureUnit ?? .automatic
                     )
                 }
             }

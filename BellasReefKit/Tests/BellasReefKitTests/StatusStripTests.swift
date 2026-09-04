@@ -27,7 +27,8 @@ struct StatusStripTests {
     @Test("a live socket over a current reading is the live state")
     func live() {
         let state = StatusStrip.state(
-            connection: .live, probe: reading(), isStale: false, lastFrameAt: now
+            connection: .live, probe: reading(), isStale: false, lastFrameAt: now,
+            adoptedSensorCount: 1
         )
         #expect(state == .live(reading: celsius))
     }
@@ -38,7 +39,8 @@ struct StatusStripTests {
         // the only difference is the monitor's own per-probe verdict, which is
         // the point — the strip owns no threshold of its own.
         let state = StatusStrip.state(
-            connection: .live, probe: reading(90), isStale: true, lastFrameAt: now
+            connection: .live, probe: reading(90), isStale: true, lastFrameAt: now,
+            adoptedSensorCount: 1
         )
         #expect(state == .stale)
     }
@@ -49,16 +51,44 @@ struct StatusStripTests {
             connection: .live,
             probe: .faulted(sensorId: "ds18b20-a", at: now),
             isStale: false,
-            lastFrameAt: now
+            lastFrameAt: now,
+            adoptedSensorCount: 1
         )
         #expect(state == .stale)
     }
 
-    @Test("no probe has ever reported: the strip is hidden, whatever the socket")
-    func hiddenWithoutAProbe() {
+    @Test("no frame ever, hub unreachable, one sensor adopted: unreachable, not hidden")
+    func unreachableBeforeTheFirstFrame() {
+        // The cold launch against a dead hub. Nothing has arrived this session,
+        // so there is no probe and no last frame — and the registry says a
+        // sensor is adopted, which makes the silence a fault rather than a
+        // configuration. Hiding here was the prototype's rule, and it left
+        // Lighting, History and System looking healthy over a hub that was not
+        // answering, which is the whole condition B3 exists to report.
+        let state = StatusStrip.state(
+            connection: .disconnected("could not reach the hub"),
+            probe: .waiting,
+            isStale: false,
+            lastFrameAt: nil,
+            adoptedSensorCount: 1
+        )
+        #expect(state == .unreachable(since: nil))
+    }
+
+    @Test("zero sensors adopted: the strip is hidden, whatever the socket")
+    func hiddenWithoutAnAdoptedSensor() {
+        // A lighting-only hub is a configuration, not a fault, and must not
+        // carry a permanent strip in either colour. The probe here is reporting
+        // and current, so nothing but the adopted count can be what hides it —
+        // a released probe still on the wire is exactly the case the app's own
+        // count excludes (`AppModel`: detached rows do not count).
         for connection in Self.everyConnection {
             let state = StatusStrip.state(
-                connection: connection, probe: .waiting, isStale: false, lastFrameAt: nil
+                connection: connection,
+                probe: reading(),
+                isStale: false,
+                lastFrameAt: now,
+                adoptedSensorCount: 0
             )
             #expect(state == .hidden, "\(connection) should hide, not speak")
         }
@@ -69,7 +99,8 @@ struct StatusStripTests {
         let lastFrame = now.addingTimeInterval(-240)
         for connection in Self.everyConnection where connection != .live {
             let state = StatusStrip.state(
-                connection: connection, probe: reading(), isStale: false, lastFrameAt: lastFrame
+                connection: connection, probe: reading(), isStale: false,
+                lastFrameAt: lastFrame, adoptedSensorCount: 1
             )
             #expect(state == .unreachable(since: lastFrame), "\(connection) claimed a live reading")
         }
@@ -80,7 +111,8 @@ struct StatusStripTests {
         // A reconnect attempt is not a connection. The strip must never be the
         // reason a number that stopped arriving still looks current.
         let state = StatusStrip.state(
-            connection: .connecting, probe: reading(), isStale: false, lastFrameAt: now
+            connection: .connecting, probe: reading(), isStale: false, lastFrameAt: now,
+            adoptedSensorCount: 1
         )
         #expect(state == .unreachable(since: now))
     }
@@ -91,7 +123,8 @@ struct StatusStripTests {
             connection: .disconnected("the hub closed the stream"),
             probe: .faulted(sensorId: "ds18b20-a", at: now),
             isStale: false,
-            lastFrameAt: now
+            lastFrameAt: now,
+            adoptedSensorCount: 1
         )
         #expect(state == .unreachable(since: now))
     }
@@ -99,23 +132,27 @@ struct StatusStripTests {
     @Test("the walk: live, stale, unreachable, live again")
     func transitions() {
         var state = StatusStrip.state(
-            connection: .live, probe: reading(), isStale: false, lastFrameAt: now
+            connection: .live, probe: reading(), isStale: false, lastFrameAt: now,
+            adoptedSensorCount: 1
         )
         #expect(state == .live(reading: celsius))
 
         state = StatusStrip.state(
-            connection: .live, probe: reading(90), isStale: true, lastFrameAt: now
+            connection: .live, probe: reading(90), isStale: true, lastFrameAt: now,
+            adoptedSensorCount: 1
         )
         #expect(state == .stale)
 
         state = StatusStrip.state(
             connection: .disconnected("could not reach the hub"),
-            probe: reading(300), isStale: true, lastFrameAt: now.addingTimeInterval(-240)
+            probe: reading(300), isStale: true, lastFrameAt: now.addingTimeInterval(-240),
+            adoptedSensorCount: 1
         )
         #expect(state == .unreachable(since: now.addingTimeInterval(-240)))
 
         state = StatusStrip.state(
-            connection: .live, probe: reading(), isStale: false, lastFrameAt: now
+            connection: .live, probe: reading(), isStale: false, lastFrameAt: now,
+            adoptedSensorCount: 1
         )
         #expect(state == .live(reading: celsius))
     }
@@ -250,10 +287,29 @@ struct StatusStripFromMonitorTests {
         #expect(StatusStrip.state(monitor: nil, preferred: nil) == .hidden)
     }
 
-    @Test("a monitor with no probe yet: still nothing to say")
-    func noProbe() throws {
+    @Test("no sensor adopted: nothing to say, and the count is what says so")
+    func noAdoptedSensor() throws {
         let m = try monitor()
+        m.adoptedSensorCount = { 0 }
         #expect(StatusStrip.state(monitor: m, preferred: nil) == .hidden)
+    }
+
+    @Test("a sensor adopted and not one frame yet: the strip speaks up")
+    func adoptedButSilent() throws {
+        let m = try monitor()
+        m.adoptedSensorCount = { 1 }
+        // The cold launch against a dead hub, read off a real monitor: never
+        // started, so the socket is idle and no frame has ever arrived.
+        #expect(StatusStrip.state(monitor: m, preferred: nil) == .unreachable(since: nil))
+    }
+
+    @Test("a registry that has not loaded does not hide the strip either")
+    func unloadedRegistryDoesNotHide() throws {
+        let m = try monitor()
+        // `adoptedSensorCount` is `{ nil }` until the catalog loads, and a hub
+        // that cannot be reached is a hub whose catalog never will. Hiding on
+        // an unknown count would silence the one fault this strip is for.
+        #expect(StatusStrip.state(monitor: m, preferred: nil) == .unreachable(since: nil))
     }
 
     @Test("one reporting probe: live, and its own reading")
