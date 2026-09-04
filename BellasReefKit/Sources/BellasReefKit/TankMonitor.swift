@@ -116,6 +116,15 @@ public final class TankMonitor {
     /// Latest state per actuator, keyed by id.
     public private(set) var channels: [String: Components.Schemas.StateFrame] = [:]
 
+    /// Pending `nextFrame(for:newerThan:timeout:)` calls, keyed by actuator
+    /// id. Served from `apply(_:)` the moment a frame clears a waiter's floor.
+    private struct FrameWaiter {
+        let id: UUID
+        let floor: Date?
+        let deliver: @MainActor (Components.Schemas.StateFrame) -> Void
+    }
+    @ObservationIgnored private var frameWaiters: [String: [FrameWaiter]] = [:]
+
     /// `device_id` -> declared role, from the registry.
     ///
     /// A state frame carries what an actuator is *doing* and never what it is
@@ -400,6 +409,7 @@ public final class TankMonitor {
                 return
             }
             channels[id] = state
+            serveFrameWaiters(for: id, with: state)
         case let .alert(alert):
             connection = .live
             apply(alert.payload)
@@ -408,6 +418,26 @@ public final class TankMonitor {
             // StreamClient.decode.
             connection = .live
         }
+    }
+
+    private func serveFrameWaiters(for id: String, with frame: Components.Schemas.StateFrame) {
+        guard let waiting = frameWaiters[id], !waiting.isEmpty else { return }
+        var kept: [FrameWaiter] = []
+        for waiter in waiting {
+            if Self.clears(frame, waiter.floor) { waiter.deliver(frame) } else { kept.append(waiter) }
+        }
+        frameWaiters[id] = kept.isEmpty ? nil : kept
+    }
+
+    private static func clears(_ frame: Components.Schemas.StateFrame, _ floor: Date?) -> Bool {
+        guard let floor else { return true }
+        return frame.payload.emittedAt > floor
+    }
+
+    // Internal, not private: the Identify wait tests need to know the waiter
+    // is registered before they feed the frame that should resolve it.
+    func isWaitingForFrame(for deviceId: String) -> Bool {
+        !(frameWaiters[deviceId] ?? []).isEmpty
     }
 
     private func apply(_ reading: Components.Schemas.SensorReading) {
@@ -457,5 +487,53 @@ public final class TankMonitor {
             alerts.append(entry)
         }
         alerts.sort { $0.raisedAt > $1.raisedAt }
+    }
+}
+
+extension TankMonitor: StateFrameSource {
+    public func heldFrame(for deviceId: String) -> Components.Schemas.StateFrame? {
+        channels[deviceId]
+    }
+
+    public func nextFrame(
+        for deviceId: String, newerThan floor: Date?, timeout: Duration
+    ) async -> Components.Schemas.StateFrame? {
+        if let held = channels[deviceId], Self.clears(held, floor) { return held }
+        let (frames, continuation) = AsyncStream<Components.Schemas.StateFrame>.makeStream(
+            bufferingPolicy: .bufferingNewest(1)
+        )
+        let token = UUID()
+        frameWaiters[deviceId, default: []].append(
+            FrameWaiter(id: token, floor: floor) { frame in
+                continuation.yield(frame)
+                continuation.finish()
+            }
+        )
+        defer {
+            frameWaiters[deviceId]?.removeAll { $0.id == token }
+            if frameWaiters[deviceId]?.isEmpty == true { frameWaiters[deviceId] = nil }
+        }
+        // Race the stream against the clock. Whichever child finishes first
+        // wins; the other is cancelled (AsyncStream iteration and Task.sleep
+        // both return promptly on cancellation).
+        return await withTaskGroup(of: Components.Schemas.StateFrame?.self) { group in
+            group.addTask {
+                for await frame in frames { return frame }
+                return nil
+            }
+            group.addTask {
+                try? await Task.sleep(for: timeout)
+                return nil
+            }
+            let first = await group.next() ?? nil
+            group.cancelAll()
+            continuation.finish()
+            // The timeout child can win the race against a frame that has
+            // already been applied: `apply(_:)` writes `channels` and serves
+            // the waiter, and the sleep can fire in the same instant. The
+            // frame is in `channels` either way, so check there before
+            // reporting a timeout.
+            return first ?? channels[deviceId].flatMap { Self.clears($0, floor) ? $0 : nil }
+        }
     }
 }
