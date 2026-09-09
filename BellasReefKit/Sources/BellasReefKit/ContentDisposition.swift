@@ -1,8 +1,6 @@
 // Bella's Reef iOS — closed source.
 
 import Foundation
-import HTTPTypes
-import OpenAPIRuntime
 
 /// Reads the filename out of a `Content-Disposition` header.
 ///
@@ -43,58 +41,5 @@ public enum ContentDisposition {
             return name
         }
         return nil
-    }
-}
-
-/// Carries one response's `Content-Disposition` back to the call that wanted
-/// it.
-///
-/// The 4.4.0 spec describes the header on `historyExport` in prose but does
-/// not declare it as a response header, so swift-openapi-generator emits no
-/// `Ok.Headers` for the 200 and the value is dropped before any call site can
-/// see it. The alternatives were to hand-write the request — forbidden here,
-/// the client is generated — or to ignore the hub's own name for the file. A
-/// middleware reading one header off the raw response is the smallest thing
-/// that does neither.
-///
-/// **Deleting this is a backend change:** declare `Content-Disposition` in
-/// the 200's `headers` and the generator hands `response.headers.contentDisposition`
-/// to `HubClient` directly.
-///
-/// Opt-in via a task local, so the middleware writes only into the call that
-/// installed a sink. `UniversalClient` invokes middlewares inline in the
-/// caller's task (`for middleware in middlewares.reversed()` around a plain
-/// `await`), so the local is visible from `intercept` and two exports running
-/// at once cannot cross wires.
-final class ResponseDispositionSink: @unchecked Sendable {
-    @TaskLocal static var active: ResponseDispositionSink?
-
-    private let lock = NSLock()
-    private var stored: String?
-
-    var value: String? {
-        get { lock.withLock { stored } }
-        set { lock.withLock { stored = newValue } }
-    }
-}
-
-/// See `ResponseDispositionSink`.
-struct ContentDispositionMiddleware: ClientMiddleware {
-    func intercept(
-        _ request: HTTPRequest,
-        body: HTTPBody?,
-        baseURL: URL,
-        operationID: String,
-        next: (HTTPRequest, HTTPBody?, URL) async throws -> (HTTPResponse, HTTPBody?)
-    ) async throws -> (HTTPResponse, HTTPBody?) {
-        let (response, responseBody) = try await next(request, body, baseURL)
-        // Outermost in `HubClient`'s middleware list — `middlewares[0]` wraps
-        // the rest — so this observes whatever `BearerAuthMiddleware`
-        // finally returns, including the response to its retry after a 401,
-        // rather than the 401 itself.
-        if let sink = ResponseDispositionSink.active {
-            sink.value = response.headerFields[.contentDisposition]
-        }
-        return (response, responseBody)
     }
 }
