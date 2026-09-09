@@ -403,17 +403,25 @@ struct AdoptDeviceSheet: View {
             case .bound:
                 onAdopted()
                 dismiss()
-            case .channelGone:
-                problem = "The hub no longer announces this channel. Pull to refresh the list."
-            case .alreadyBound:
-                problem = "Another device claimed this channel since the list loaded."
-            case .roleNotLegal:
-                problem = "The hub refused the role for this device."
+            case let .some(refused):
+                problem = Self.refusal(refused)
             case nil:
                 problem = "Not connected to the hub."
             }
         } catch {
             problem = HumanError.describe(error)
+        }
+    }
+
+    /// The sentence for a bind the hub declined. One place, so adopt() and
+    /// startIdentify() cannot drift apart: both entries reach the same hub
+    /// endpoint and the operator should read the same refusal either way.
+    private static func refusal(_ outcome: HubClient.BindOutcome) -> String? {
+        switch outcome {
+        case .bound: nil
+        case .channelGone: "The hub no longer announces this channel. Pull to refresh the list."
+        case .alreadyBound: "Another device claimed this channel since the list loaded."
+        case .roleNotLegal: "The hub refused the role for this device."
         }
     }
 
@@ -445,15 +453,9 @@ struct AdoptDeviceSheet: View {
                 // A matched row keeps its name; prefillDetachedName() already
                 // put it in `name` when the catalog knew the row.
                 identifyName = created ? "" : name
-            case .channelGone:
+            case let refused:
                 identify = nil
-                problem = "The hub no longer announces this channel. Pull to refresh the list."
-            case .alreadyBound:
-                identify = nil
-                problem = "Another device claimed this channel since the list loaded."
-            case .roleNotLegal:
-                identify = nil
-                problem = "The hub refused the role for this device."
+                problem = Self.refusal(refused)
             }
         } catch {
             identify = nil

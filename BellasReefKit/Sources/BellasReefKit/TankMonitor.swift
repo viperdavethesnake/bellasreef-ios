@@ -435,9 +435,14 @@ public final class TankMonitor {
     }
 
     // Internal, not private: the Identify wait tests need to know the waiter
-    // is registered before they feed the frame that should resolve it.
+    // is registered before they feed the frame that should resolve it, and
+    // how many are, when a test stacks two on one id.
+    func waiterCount(for deviceId: String) -> Int {
+        frameWaiters[deviceId]?.count ?? 0
+    }
+
     func isWaitingForFrame(for deviceId: String) -> Bool {
-        !(frameWaiters[deviceId] ?? []).isEmpty
+        waiterCount(for: deviceId) > 0
     }
 
     private func apply(_ reading: Components.Schemas.SensorReading) {

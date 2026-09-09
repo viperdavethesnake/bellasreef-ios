@@ -49,6 +49,23 @@ struct IdentifyWaitTests {
     }
     private let t1 = "2026-09-04T17:00:20.000000Z"
 
+    /// Spin until `count` waiters are registered on `id`. Bounded, for the
+    /// same reason as the Gate spin in IdentifyFlowTests: a regression that
+    /// never registers the waiter must fail the suite rather than park it
+    /// forever.
+    private func untilWaiting(_ m: TankMonitor, for id: String, count: Int = 1) async {
+        var spins = 0
+        while m.waiterCount(for: id) < count {
+            await Task.yield()
+            spins += 1
+            if spins > 100_000 {
+                Issue.record(
+                    "waiter for \(id) never registered: \(m.waiterCount(for: id)) of \(count)")
+                return
+            }
+        }
+    }
+
     @Test("a held frame newer than the floor resolves at once")
     func heldNewerResolvesImmediately() async throws {
         let (m, s) = monitor()
@@ -71,7 +88,7 @@ struct IdentifyWaitTests {
         let (m, s) = monitor()
         m.apply(try s.decode(stateJSON(id: "pca9685-3", duty: 0.7, emittedAt: t0)))
         let pending = Task { await m.nextFrame(for: "pca9685-3", newerThan: t0Date, timeout: .seconds(5)) }
-        while !m.isWaitingForFrame(for: "pca9685-3") { await Task.yield() }
+        await untilWaiting(m, for: "pca9685-3")
         m.apply(try s.decode(stateJSON(id: "pca9685-3", duty: 0.0, emittedAt: t1)))
         let frame = await pending.value
         #expect(duty(frame) == 0.0)
@@ -82,7 +99,7 @@ struct IdentifyWaitTests {
     func otherIdIsIgnored() async throws {
         let (m, s) = monitor()
         let pending = Task { await m.nextFrame(for: "pca9685-3", newerThan: nil, timeout: .milliseconds(60)) }
-        while !m.isWaitingForFrame(for: "pca9685-3") { await Task.yield() }
+        await untilWaiting(m, for: "pca9685-3")
         m.apply(try s.decode(stateJSON(id: "pca9685-4", duty: 0.0, emittedAt: t1)))
         let frame = await pending.value
         #expect(frame == nil)
@@ -94,6 +111,23 @@ struct IdentifyWaitTests {
         let frame = await m.nextFrame(for: "never", newerThan: nil, timeout: .milliseconds(20))
         #expect(frame == nil)
         #expect(!m.isWaitingForFrame(for: "never"))
+    }
+
+    /// The waiter list is an array on purpose. Two waits on one id — a retry
+    /// racing a wait that has not timed out, or two sheets on one channel —
+    /// must both see the frame, and the second must not be dropped when the
+    /// first is served.
+    @Test("two waiters on one id both get the frame, and neither is left behind")
+    func twoWaitersOneId() async throws {
+        let (m, s) = monitor()
+        m.apply(try s.decode(stateJSON(id: "pca9685-3", duty: 0.7, emittedAt: t0)))
+        let first = Task { await m.nextFrame(for: "pca9685-3", newerThan: t0Date, timeout: .seconds(5)) }
+        let second = Task { await m.nextFrame(for: "pca9685-3", newerThan: t0Date, timeout: .seconds(5)) }
+        await untilWaiting(m, for: "pca9685-3", count: 2)
+        m.apply(try s.decode(stateJSON(id: "pca9685-3", duty: 0.0, emittedAt: t1)))
+        #expect(duty(await first.value) == 0.0)
+        #expect(duty(await second.value) == 0.0)
+        #expect(!m.isWaitingForFrame(for: "pca9685-3"))
     }
 
     @Test("with no floor, any frame counts")

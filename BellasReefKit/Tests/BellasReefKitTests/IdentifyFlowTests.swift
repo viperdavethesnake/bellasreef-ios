@@ -112,11 +112,13 @@ private let granted = #"{"id":"6f1c2a4e-0000-4000-8000-000000000001","target":"p
 private let renamed = #"{"device_id":"pca9685-3","display_name":"Left fixture"}"#
 
 /// A hub that answers every call the flow can make; `overrideStatus` lets one
-/// test refuse the pulse, and `beforeBind` lets one test hold the bind open
-/// long enough to cancel underneath it.
+/// test refuse the pulse, `beforeBind` lets one test hold the bind open long
+/// enough to cancel underneath it, and `beforeUnbind` does the same for the
+/// unbind (and may throw, the way a cancelled URLSession request does).
 private func hub(
     log: CallLog, bodies: Bodies, bind: String, overrideStatus: Int = 200,
-    beforeBind: (@Sendable () async -> Void)? = nil
+    beforeBind: (@Sendable () async -> Void)? = nil,
+    beforeUnbind: (@Sendable () async throws -> Void)? = nil
 ) -> HubClient {
     HubClient(
         hub: anyHub, tokens: MemoryCredentials(token: "refresh"),
@@ -127,6 +129,7 @@ private func hub(
             await log.record(operation)
             bodies.record(operation, body, path: request.path)
             if operation == "bindDevice", let beforeBind { await beforeBind() }
+            if operation == "unbindDevice", let beforeUnbind { try await beforeUnbind() }
             switch operation {
             case "bindDevice": return (200, json(bind))
             case "createOverride": return (overrideStatus, overrideStatus == 200 ? json(granted) : nil)
@@ -365,6 +368,63 @@ struct IdentifyFlowTests {
         #expect(flow.phase == .left, "the cancelled pulse must not leak a .failed phase over leave()'s .left")
         #expect(await log.count(of: "releaseOverride") == 1)
         #expect(await log.operations.suffix(3) == ["releaseOverride", "unbindDevice", "forgetDevice"])
+    }
+
+    /// A second Not this one while the first is still unbinding. leave()
+    /// cancels the first task and starts another; the first's in-flight call
+    /// then fails the way URLSession fails a cancelled request — after the
+    /// second leave has already landed on .left. That late failure must not
+    /// be written over a leave that succeeded.
+    @Test("a second Not this one during the first does not turn a finished leave into a failure")
+    func doubleLeave() async throws {
+        let log = CallLog(), bodies = Bodies()
+        let frames = CannedFrames()
+        frames.next = try stateFrame(emittedAt: "2026-09-04T17:00:20.000000Z")
+        let gate = Gate()
+        let flow = makeFlow(
+            hub(
+                log: log, bodies: bodies, bind: boundCreated,
+                beforeUnbind: {
+                    // Only the first unbind parks; the second goes straight
+                    // through so the second leave can finish underneath it.
+                    guard await log.count(of: "unbindDevice") == 1 else { return }
+                    await gate.arrive()
+                    try Task.checkCancellation()
+                }
+            ),
+            frames: frames
+        )
+        _ = try await flow.start()
+        await flow.settle()
+        #expect(flow.phase == .answer)
+
+        flow.leave()
+        var spins = 0
+        while await gate.hasArrived == false {
+            await Task.yield()
+            spins += 1
+            if spins > 100_000 {
+                Issue.record("the first unbind never reached the stub; phase is \(flow.phase)")
+                await gate.release()
+                return
+            }
+        }
+        flow.leave()
+        await flow.settle()
+        #expect(flow.phase == .left, "the second leave ran to completion")
+
+        await gate.release()
+        // The first task is no longer `running`, so settle() cannot await
+        // it. Give it room to carry the thrown cancellation back up to its
+        // catch, and stop early the moment that catch writes anything.
+        spins = 0
+        while flow.phase == .left, spins < 10_000 {
+            await Task.yield()
+            spins += 1
+        }
+        #expect(flow.phase == .left, "the cancelled first leave must not write .failed over a leave that succeeded")
+        #expect(await log.count(of: "unbindDevice") == 2)
+        #expect(await log.count(of: "forgetDevice") == 1, "only the leave that finished forgot the row")
     }
 
     @Test("an untrusted clock fails the pulse and leaves the adoption standing")
