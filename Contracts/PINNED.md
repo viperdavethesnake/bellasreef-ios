@@ -6,9 +6,9 @@ reviewable diff rather than something that shifts under the app.
 
 | | |
 |---|---|
-| Backend commit | `2e52de3` (PR #102, history export) |
-| CI run | [`33811813543`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/33811813543) (`client-contracts` artifact) |
-| Pinned on | 2026-09-03 |
+| Backend commit | `c443444` (main after PR #107; the contract change is PR #104) |
+| CI run | [`33912267051`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/33912267051) (`client-contracts` artifact) |
+| Pinned on | 2026-09-09 |
 | OpenAPI | 3.1.0, 29 paths |
 | Contracts version | 4.4.0 |
 | Frame schema | v1 |
@@ -186,9 +186,25 @@ the spec above rather than guessed:
   `application/json` — so the generated `Ok.Body` is an enum with a
   `.csv(HTTPBody)` case and a `.json(HistoryExport)` case. Which one arrives
   is decided by the `format` query parameter, not by content negotiation.
-- The `Content-Disposition` filename the endpoint sets is documented in the
-  handler but **not declared as a response header** in the spec, so the
-  generator emits no `Ok.Headers` and the value never reaches a call site.
-  `HubClient` lifts it out of the raw response with a middleware and falls
-  back to building the same name locally (`ExportFilename`). Declaring the
-  header in the backend spec would delete that middleware.
+- The `Content-Disposition` filename the endpoint sets was, at the first
+  4.4.0 pin, documented in the handler but **not declared as a response
+  header** in the spec, so the generator emitted no `Ok.Headers` and the
+  value never reached a call site. `HubClient` lifted it out of the raw
+  response with a middleware and fell back to building the same name locally
+  (`ExportFilename`). Backend #104 declared the header; see the re-pin below.
+
+## 4.4.0 re-pinned (2026-09-09): `Content-Disposition` declared
+
+Same contracts version, one spec change: backend PR #104 declared
+`Content-Disposition` under the `historyExport` 200's `headers`. The
+generator now emits `Operations.historyExport.Output.Ok.Headers` with an
+optional `contentDisposition`, and `HubClient.exportHistory` reads the hub's
+filename off that instead of the middleware. `ContentDispositionMiddleware`
+and `ResponseDispositionSink` are deleted; the `ContentDisposition.filename`
+parser stays, because the header's value still needs its filename lifted out.
+
+The header is declared but not `required`, so the property is `String?` and
+the `ExportFilename.build` fallback is still live. The two wrapper tests that
+cover this — the hub's own name is used, and a missing header falls back —
+were written against the transport, not the middleware, so they pass unchanged
+on either mechanism. That is what let this be a re-pin rather than a repair.

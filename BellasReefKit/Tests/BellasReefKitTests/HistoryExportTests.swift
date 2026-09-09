@@ -223,7 +223,7 @@ struct HistoryExportClientTests {
                 // produce for this window. The real hub sends exactly that
                 // name, which means a test using it passes whether the
                 // header was read or silently ignored — the first version of
-                // this test did, and proved nothing about the middleware.
+                // this test did, and proved nothing about the header path.
                 disposition: #"attachment; filename="named-by-the-hub.csv""#,
                 body: Data(csvBody.utf8)
             )
@@ -237,9 +237,9 @@ struct HistoryExportClientTests {
         #expect(file.utType == .commaSeparatedText)
     }
 
-    /// The header is documented in the handler but not declared in the spec,
-    /// so a hub that stops sending it breaks nothing: the same name is built
-    /// from the window that was requested.
+    /// The header is declared on the 200 but not required, so a hub that
+    /// stops sending it breaks nothing: the same name is built from the
+    /// window that was requested.
     @Test("a CSV 200 with no disposition header falls back to the built name")
     func csvWithoutHeader() async throws {
         let client = client { _, _ in

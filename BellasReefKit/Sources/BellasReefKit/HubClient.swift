@@ -161,10 +161,6 @@ public actor HubClient {
             configuration: Configuration(dateTranscoder: FractionalSecondsDateTranscoder()),
             transport: transport,
             middlewares: [
-                // Outermost, so it observes the response BearerAuth finally
-                // returns rather than a 401 it is about to retry. Inert
-                // unless a call installs a sink — see `ResponseDispositionSink`.
-                ContentDispositionMiddleware(),
                 BearerAuthMiddleware(
                     token: { try await provider.token() },
                     freshToken: { try await provider.freshToken() }
@@ -804,15 +800,9 @@ public actor HubClient {
     public func exportHistory(
         deviceId: String, from start: Date, to end: Date, format: ExportFormat
     ) async throws -> ExportedFile {
-        // The hub's own name for the file, if it sent one. See
-        // `ResponseDispositionSink` for why this is not simply read off the
-        // response.
-        let sink = ResponseDispositionSink()
-        let output = try await ResponseDispositionSink.$active.withValue(sink) {
-            try await client.historyExport(
-                query: .init(deviceId: deviceId, start: start, end: end, format: format.wire)
-            )
-        }
+        let output = try await client.historyExport(
+            query: .init(deviceId: deviceId, start: start, end: end, format: format.wire)
+        )
 
         switch output {
         case let .ok(response):
@@ -827,9 +817,13 @@ public actor HubClient {
             case let .json(export):
                 data = try Self.exportEncoder().encode(export)
             }
+            // The hub's own name for the file when it sent one. Declared on
+            // the 200 since backend #104, so the generator hands it over as
+            // a typed header; before that pin it was lifted off the raw
+            // response by a middleware.
             return ExportedFile(
                 data: data,
-                suggestedFilename: ContentDisposition.filename(from: sink.value)
+                suggestedFilename: ContentDisposition.filename(from: response.headers.contentDisposition)
                     ?? ExportFilename.build(
                         deviceId: deviceId, start: start, end: end, format: format
                     ),
