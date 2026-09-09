@@ -263,20 +263,29 @@ public final class IdentifyFlow {
     }
 
     private func unbindAndMaybeForget() async {
+        // A second leave() — a double tap on Not this one — cancels this
+        // task and starts another. Every phase write below an await is
+        // guarded, as in pulse(): the cancelled call surfaces as a thrown
+        // CancellationError well after the second leave has landed on .left,
+        // and that must not turn a leave that succeeded into a failure.
         do {
             if let holdId = activeHoldId {
                 // Tolerated either way: 404 means the hold already expired.
                 _ = try? await client.release(overrideId: holdId)
+                if Task.isCancelled { return }
                 activeHoldId = nil
             }
             if adopted {
                 _ = try await client.unbind(deviceId: deviceId)
+                if Task.isCancelled { return }
                 if created == true {
                     _ = try await client.forget(deviceId: deviceId)
+                    if Task.isCancelled { return }
                 }
             }
             phase = .left
         } catch {
+            if Task.isCancelled { return }
             phase = .failed(reason: HumanError.describe(error), retry: .leave)
         }
     }
