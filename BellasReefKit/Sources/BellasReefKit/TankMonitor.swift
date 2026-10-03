@@ -303,6 +303,17 @@ public final class TankMonitor {
         await stream.disconnect()
     }
 
+    /// Make a socket that claims to be live prove it, now.
+    ///
+    /// For the return to the foreground: a socket that died while the app was
+    /// suspended can still look open, and the periodic liveness ping is up to
+    /// 10 s away. A silent hub ends the stream with `.hubSilent` and `run()`
+    /// reconnects as for any other drop.
+    public func verifyLive() async {
+        guard connection == .live else { return }
+        await stream.probe()
+    }
+
     public func stop() {
         task?.cancel()
         task = nil

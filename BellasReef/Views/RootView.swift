@@ -24,6 +24,7 @@ struct RootView: View {
 /// out of scope, see that spec's "Out of scope"), History, System.
 struct MainTabs: View {
     @Environment(AppModel.self) private var model
+    @Environment(\.scenePhase) private var scenePhase
     /// Held here rather than left inside the TabView, so the selected tab
     /// survives anything above it being rebuilt.
     @State private var selection: TabID = .tank
@@ -100,6 +101,12 @@ struct MainTabs: View {
         // banners this process has no handle for. Re-attach before the first
         // reconcile, or they would sit there counting down a hold that ended.
         .task { HoldActivityController.shared.adoptExisting() }
+        // Coming back to the app is when "Connected" is most likely to be a
+        // leftover: the socket can die while suspended and still look open.
+        // Ask it now instead of waiting for the next liveness tick.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { Task { await model.monitor?.verifyLive() } }
+        }
         // Every frame, not only the ones that change the live-hold set. The
         // case that most needs reconciling is a set that never changes: the
         // app relaunches, adopts a banner for a hold that ended while it was

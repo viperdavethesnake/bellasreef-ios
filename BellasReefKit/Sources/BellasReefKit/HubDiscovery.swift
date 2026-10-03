@@ -300,20 +300,21 @@ public final class HubDiscovery {
 /// Both the connection's state handler and the timeout can fire, and resuming a
 /// `CheckedContinuation` twice is a crash rather than a warning. `@unchecked` is
 /// carried deliberately: the lock is the invariant the compiler cannot see.
-private final class ResumeOnce: @unchecked Sendable {
+/// `StreamLiveness` uses the same race for a ping against its deadline.
+final class ResumeOnce<Value: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
     private var done = false
-    private let continuation: CheckedContinuation<URL?, Never>
+    private let continuation: CheckedContinuation<Value, Never>
 
-    init(_ continuation: CheckedContinuation<URL?, Never>) {
+    init(_ continuation: CheckedContinuation<Value, Never>) {
         self.continuation = continuation
     }
 
-    func finish(_ url: URL?) {
+    func finish(_ value: Value) {
         lock.lock()
         let isFirst = !done
         done = true
         lock.unlock()
-        if isFirst { continuation.resume(returning: url) }
+        if isFirst { continuation.resume(returning: value) }
     }
 }
