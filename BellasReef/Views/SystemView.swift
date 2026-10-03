@@ -200,10 +200,16 @@ struct SystemView: View {
         return clients.count == 1 ? "1 device paired" : "\(clients.count) devices paired"
     }
 
+    /// What the leaf shows: the fetch, or the stream's live `host` frame when
+    /// that is newer (contracts 4.5.0) — so the numbers move while you look.
+    private var shownHubStatus: Components.Schemas.HubStatusView? {
+        HubStatusFormat.freshest(fetched: hubStatus, live: model.monitor?.host)
+    }
+
     private var hubStatusSummary: String {
-        guard let hubStatus else { return hubStatusLoaded ? "—" : "…" }
-        let temp = HubStatusFormat.temperatureLine(tempC: hubStatus.tempC)
-        return "\(temp) · load \(String(format: "%.2f", hubStatus.load1m))"
+        guard let status = shownHubStatus else { return hubStatusLoaded ? "—" : "…" }
+        let temp = HubStatusFormat.temperatureLine(tempC: status.tempC)
+        return "\(temp) · load \(String(format: "%.2f", status.load1m))"
     }
 
     // ---------------------------------------------------------------- leaves
@@ -433,7 +439,7 @@ struct SystemView: View {
     /// every 30 s, so "Updated" is honest, not decorative.
     private var hubStatusLeaf: some View {
         List {
-            if let status = hubStatus {
+            if let status = shownHubStatus {
                 Section {
                     LabeledContent("Temperature") {
                         Text(HubStatusFormat.temperatureLine(tempC: status.tempC))

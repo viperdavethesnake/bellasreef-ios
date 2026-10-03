@@ -1,11 +1,29 @@
 // Bella's Reef iOS — closed source.
 
+import BellasReefAPI
 import Foundation
 
 /// Renders `GET /api/v1/hub-status` (the hub machine's own vitals) into the
 /// strings the System tab's Hub status leaf shows. Pure functions, tested
 /// against coco's measured values — the same fixtures the backend pins.
 public enum HubStatusFormat {
+
+    /// The fresher of the fetched snapshot and the stream's live `host` frame
+    /// (contracts 4.5.0), as the one type the System tab renders. A fetch
+    /// alone froze the leaf at whatever it read on appearance — 59.5 °C for
+    /// eleven minutes on 2026-10-02 while coco was off.
+    public static func freshest(
+        fetched: Components.Schemas.HubStatusView?, live: Components.Schemas.HostStatus?
+    ) -> Components.Schemas.HubStatusView? {
+        guard let live else { return fetched }
+        if let fetched, fetched.updatedAt >= live.emittedAt { return fetched }
+        return .init(
+            cpuCount: live.cpuCount, load15m: live.load15m, load1m: live.load1m,
+            load5m: live.load5m, memAvailableKb: live.memAvailableKb,
+            memTotalKb: live.memTotalKb, tempC: live.tempC, updatedAt: live.emittedAt,
+            uptimeS: live.uptimeS
+        )
+    }
 
     /// "555 MB of 991 MB" — used derived as total minus available, the same
     /// arithmetic `free -m` prints as "used" plus cache pressure honesty:

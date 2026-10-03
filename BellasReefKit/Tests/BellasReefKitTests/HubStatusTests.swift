@@ -1,5 +1,6 @@
 // Bella's Reef iOS — closed source.
 
+import BellasReefAPI
 import Foundation
 import Testing
 
@@ -97,5 +98,55 @@ struct HubStatusClientTests {
         let client = stub { _ in (404, nil) }
         let status = try await client.hubStatus()
         #expect(status == nil)
+    }
+}
+
+// MARK: - Live vitals (contracts 4.5.0)
+
+/// The System tab's Hub status was a one-off `GET /hub-status`, so it froze at
+/// whatever it read on appearance — 59.5 °C for eleven minutes on 2026-10-02
+/// while coco was off. With `host` frames on the stream, the fresher of the
+/// two wins.
+@Suite("Hub status freshest")
+@MainActor
+struct HubStatusFreshestTests {
+    private func rest(updatedAt: String, temp: Double) throws -> Components.Schemas.HubStatusView {
+        let json = """
+        {"load_1m":0.21,"load_5m":0.2,"load_15m":0.19,"cpu_count":4,"mem_total_kb":1014464,\
+        "mem_available_kb":445792,"temp_c":\(temp),"uptime_s":100.0,"updated_at":"\(updatedAt)"}
+        """
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(Components.Schemas.HubStatusView.self, from: Data(json.utf8))
+    }
+
+    /// Emitted 2026-10-03T05:10:00Z, 46.3 °C, load 0.42.
+    private func live() throws -> Components.Schemas.HostStatus {
+        guard case let .host(frame) = try StreamClient(baseURL: URL(string: "http://hub.invalid")!)
+            .decode(HubReportingTests.host) else { throw CancellationError() }
+        return frame.payload
+    }
+
+    @Test("a newer live frame replaces the fetched snapshot")
+    func liveWins() throws {
+        let shown = HubStatusFormat.freshest(
+            fetched: try rest(updatedAt: "2026-10-03T05:00:00Z", temp: 59.5), live: try live())
+        #expect(shown?.tempC == 46.3)
+        #expect(shown?.load1m == 0.42)
+    }
+
+    @Test("an older live frame does not overwrite a newer fetch")
+    func newerFetchWins() throws {
+        let shown = HubStatusFormat.freshest(
+            fetched: try rest(updatedAt: "2026-10-03T05:20:00Z", temp: 50.0), live: try live())
+        #expect(shown?.tempC == 50.0)
+    }
+
+    @Test("either alone is shown; neither is nil")
+    func eitherAlone() throws {
+        #expect(HubStatusFormat.freshest(fetched: nil, live: try live())?.tempC == 46.3)
+        #expect(HubStatusFormat.freshest(
+            fetched: try rest(updatedAt: "2026-10-03T05:00:00Z", temp: 59.5), live: nil)?.tempC == 59.5)
+        #expect(HubStatusFormat.freshest(fetched: nil, live: nil) == nil)
     }
 }
