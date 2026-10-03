@@ -24,10 +24,8 @@ struct RootView: View {
 /// out of scope, see that spec's "Out of scope"), History, System.
 struct MainTabs: View {
     @Environment(AppModel.self) private var model
-    /// Held here rather than left inside the TabView. The accessory below is
-    /// installed conditionally, and a modifier that comes and goes rebuilds
-    /// the tab view; an external binding is what stops the strip appearing
-    /// mid-session from bouncing the operator back to Tank.
+    /// Held here rather than left inside the TabView, so the selected tab
+    /// survives anything above it being rebuilt.
     @State private var selection: TabID = .tank
 
     private enum TabID: Hashable { case tank, lighting, history, system }
@@ -78,30 +76,26 @@ struct MainTabs: View {
         // tab, not just Tank. Native chrome — the strip draws a glyph and a
         // line and lets the accessory bring the material.
         //
-        // Conditional modifier rather than empty accessory content, which was
-        // the first attempt: measured on the simulator 2026-09-03, an accessory
-        // whose content renders nothing still draws its own capsule, so "no
-        // sensor adopted hides the strip" has to mean not installing it.
-        Group {
-            if strip == .hidden {
-                tabs
-            } else {
-                tabs.tabViewBottomAccessory {
-                    StatusStripView(
-                        monitor: model.monitor,
-                        primarySensorId: model.preferences?.primarySensorId,
-                        unit: model.preferences?.temperatureUnit ?? .automatic
-                    )
-                }
-            }
+        // Switched with `isEnabled`, never installed and removed. Empty content
+        // still draws its own capsule (measured on the simulator 2026-09-03),
+        // so "no sensor adopted hides the strip" was first done by swapping
+        // between a tab view with the accessory and one without. That swap
+        // rebuilt the whole TabView, re-running every tab's `.task`, and on a
+        // hub with no sensor adopted it fed itself (2026-10-02, coco): Tank's
+        // `.task` refreshes the catalog, the catalog reads `.loading` and the
+        // strip shows, the fetch lands with zero sensors and the strip hides,
+        // the TabView rebuilds and Tank's `.task` runs again — ~13 requests a
+        // second at the hub, each refresh cancelled mid-flight, so the catalog
+        // never stayed `.loaded`: Tank amber "Waiting for a sensor", Lighting
+        // "Loading lights…" forever. `isEnabled` (iOS 26.1, hence the floor)
+        // keeps one tree for the life of the session.
+        tabs.tabViewBottomAccessory(isEnabled: strip != .hidden) {
+            StatusStripView(
+                monitor: model.monitor,
+                primarySensorId: model.preferences?.primarySensorId,
+                unit: model.preferences?.temperatureUnit ?? .automatic
+            )
         }
-        // The Live Activity wiring hangs off the Group, outside the branch, on
-        // purpose: installing or removing the accessory swaps one branch for
-        // the other, and a `.task` attached inside would be torn down and
-        // re-run at every swap — `adoptExisting()` once per appearance of the
-        // strip, and a fresh `onChange` baseline each time. Out here the two
-        // modifiers see one view for the life of the session.
-        //
         // A Live Activity survives the app being killed, so a relaunch finds
         // banners this process has no handle for. Re-attach before the first
         // reconcile, or they would sit there counting down a hold that ended.
