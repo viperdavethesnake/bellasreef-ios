@@ -68,7 +68,11 @@ public final class DeviceCatalog {
     }
 
     public func refresh() async {
-        if sensors.isEmpty { state = .loading }
+        // `.loading` means "never loaded", not "has no sensors": keyed on
+        // `sensors.isEmpty`, a confirmed-empty registry went back to loading
+        // on every refresh (2026-10-02, coco).
+        let before = state
+        if state != .loaded { state = .loading }
         do {
             sensors = try await client.sensors().sorted { lhs, rhs in
                 (lhs.displayName ?? lhs.deviceId) < (rhs.displayName ?? rhs.deviceId)
@@ -76,6 +80,12 @@ public final class DeviceCatalog {
             devices = try await client.devices()
             state = .loaded
         } catch {
+            // The caller's `.task` was cancelled, which says nothing about
+            // the hub — same rule as `HistoryModel.load()`.
+            if HumanError.isCancellation(error) {
+                state = before
+                return
+            }
             log.error("could not load devices: \(String(describing: error))")
             state = .failed(HumanError.describe(error))
         }
