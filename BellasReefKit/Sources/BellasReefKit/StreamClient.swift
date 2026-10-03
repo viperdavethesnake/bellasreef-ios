@@ -36,10 +36,14 @@ public actor StreamClient {
     public enum StreamError: Error, CustomStringConvertible {
         case notConnected
         case undecodableFrame(String)
+        /// The socket looked open but the hub stopped answering pings
+        /// (`StreamLiveness`) — power pulled, api frozen, network gone.
+        case hubSilent
 
         public var description: String {
             switch self {
             case .notConnected: "stream is not connected"
+            case .hubSilent: "the hub stopped answering"
             case let .undecodableFrame(detail):
                 // A frame we cannot decode means the client and hub disagree
                 // about the contract — a pinned-spec problem, not a network one.
@@ -51,6 +55,9 @@ public actor StreamClient {
     private let baseURL: URL
     private let session: URLSession
     private var task: URLSessionWebSocketTask?
+    /// Set when liveness, not the hub, ended the current socket, so the stream
+    /// can say why instead of surfacing the cancellation that did it.
+    private var silent = false
     private let decoder: JSONDecoder
 
     public init(baseURL: URL, session: URLSession = .shared) {
@@ -98,21 +105,73 @@ public actor StreamClient {
                     let auth = try JSONEncoder().encode(["token": accessToken])
                     try await task.send(.string(String(decoding: auth, as: UTF8.self)))
 
+                    // Nothing else notices a hub that goes without closing the
+                    // socket: `receive()` below would wait forever.
+                    let watcher = Task {
+                        await StreamLiveness.watch(
+                            every: StreamLiveness.interval,
+                            deadline: StreamLiveness.deadline,
+                            ping: { await Self.ping(task) },
+                            onSilent: { await self.silenced(task) }
+                        )
+                    }
+                    defer { watcher.cancel() }
+
                     while true {
                         let message = try await task.receive()
                         guard case let .string(text) = message else { continue }
                         continuation.yield(try self.decode(text))
                     }
                 } catch {
-                    continuation.finish(throwing: error)
+                    if await self.takeSilent() {
+                        continuation.finish(throwing: StreamError.hubSilent)
+                    } else {
+                        continuation.finish(throwing: error)
+                    }
                 }
             }
         }
     }
 
+    /// Ask the open socket to prove itself now, rather than at the next
+    /// liveness tick. For the app coming back to the foreground, where a
+    /// socket that died while suspended can still look open. A silent hub
+    /// ends the stream with `.hubSilent`, and the caller's reconnect loop
+    /// takes it from there.
+    @discardableResult
+    public func probe() async -> Bool {
+        guard let task else { return false }
+        let ok = await StreamLiveness.answered(within: StreamLiveness.deadline) {
+            await Self.ping(task)
+        }
+        if !ok { silenced(task) }
+        return ok
+    }
+
+    private static func ping(_ task: URLSessionWebSocketTask) async -> Bool {
+        await withCheckedContinuation { continuation in
+            // Called once: with nil on the pong, or with an error when the
+            // socket fails or is cancelled.
+            task.sendPing { error in continuation.resume(returning: error == nil) }
+        }
+    }
+
+    private func silenced(_ task: URLSessionWebSocketTask) {
+        guard task === self.task else { return }
+        log.error("hub stopped answering pings; dropping the stream")
+        silent = true
+        task.cancel(with: .goingAway, reason: nil)
+    }
+
+    private func takeSilent() -> Bool {
+        defer { silent = false }
+        return silent
+    }
+
     private func adopt(_ task: URLSessionWebSocketTask) {
         self.task?.cancel(with: .goingAway, reason: nil)
         self.task = task
+        silent = false
     }
 
     public func disconnect() {
