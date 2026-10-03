@@ -134,6 +134,19 @@ public final class TankMonitor {
     public private(set) var alerts: [Alert] = []
     public private(set) var lastFrameAt: Date?
 
+    /// The hub machine's latest vitals off the stream (`host` frame, contracts
+    /// 4.5.0) and when they arrived. Live, unlike the System tab's one-off
+    /// `GET /hub-status`.
+    public private(set) var host: Components.Schemas.HostStatus?
+    public private(set) var hostAt: Date?
+    /// When the current connection went live: the clock for "no host frame
+    /// yet on this socket".
+    private var liveSince: Date?
+    /// Whether this hub publishes `host` frames at all, from `/api/v1/info` on
+    /// each connect. A hub older than 4.5.0 never does, and must not read as
+    /// "not reporting" for being older.
+    var hubSendsHost = false
+
     private let client: HubClient
     private let stream: StreamClient
     private var task: Task<Void, Never>?
@@ -215,6 +228,28 @@ public final class TankMonitor {
         !probes.isEmpty && sensorIds.allSatisfy { isStale($0) }
     }
 
+    /// hardware-io publishes `host` every 30 s: two missed, plus margin.
+    public static let hostSilentAfter: TimeInterval = 75
+
+    /// The socket is live but nothing has come through the pipeline behind
+    /// the api for `hostSilentAfter` (stream-liveness plan, Phase B,
+    /// 2026-10-02). The ping proves the api answers; this proves hardware-io
+    /// and NATS do. Counted from the later of the last `host` frame and this
+    /// connection going live, so a reconnect does not inherit an old silence.
+    public func hubNotReporting(now: Date = Date()) -> Bool {
+        guard connection == .live, hubSendsHost,
+              let since = [hostAt, liveSince].compactMap({ $0 }).max() else { return false }
+        return now.timeIntervalSince(since) > Self.hostSilentAfter
+    }
+
+    /// `host` frames exist from contracts 4.5.0. Unparseable reads as "no":
+    /// never flag a hub on a version we could not read.
+    nonisolated static func sendsHostFrames(contractsVersion: String) -> Bool {
+        let parts = contractsVersion.split(separator: ".").map { Int($0) }
+        guard parts.count >= 2, let major = parts[0], let minor = parts[1] else { return false }
+        return (major, minor) >= (4, 5)
+    }
+
     /// Safety tone for the status line.
     ///
     /// Red is reserved: a latched interlock only. A disconnected socket is
@@ -224,6 +259,7 @@ public final class TankMonitor {
     /// actuator having latched itself off.
     public var tone: HealthTone {
         if channels.values.contains(where: { $0.payload.latched == true }) { return .safety }
+        if hubNotReporting() { return .attention }
         if !alerts.isEmpty { return .attention }
         if probes.values.contains(where: { if case .faulted = $0 { return true } else { return false } }) {
             return .attention
@@ -248,6 +284,7 @@ public final class TankMonitor {
         case .idle: return "Not connected"
         case .connecting: return "Connecting…"
         case .live:
+            if hubNotReporting() { return "Hub not reporting" }
             let faulted = probes.values.filter { if case .faulted = $0 { return true } else { return false } }
             if !faulted.isEmpty {
                 return faulted.count == 1 ? "Sensor fault" : "\(faulted.count) sensor faults"
@@ -269,7 +306,7 @@ public final class TankMonitor {
     public var connectionTone: HealthTone {
         if channels.values.contains(where: { $0.payload.latched == true }) { return .safety }
         switch connection {
-        case .live: return .allClear
+        case .live: return hubNotReporting() ? .attention : .allClear
         default: return .attention
         }
     }
@@ -281,7 +318,7 @@ public final class TankMonitor {
         switch connection {
         case .idle: return "Not connected"
         case .connecting: return "Connecting…"
-        case .live: return "Connected"
+        case .live: return hubNotReporting() ? "Hub not reporting" : "Connected"
         case let .disconnected(why): return "Disconnected — \(why)"
         case let .contractMismatch(detail): return "App and hub disagree — \(detail)"
         }
@@ -335,6 +372,10 @@ public final class TankMonitor {
                 // the stream. Seeding from REST is the only way a reconnecting
                 // client learns the tank is currently out of range.
                 await seedAlerts()
+                // Per connect, not once: the hub may have been updated while
+                // this app was away.
+                hubSendsHost = (try? await client.info())
+                    .map { Self.sendsHostFrames(contractsVersion: $0.contractsVersion) } ?? false
                 for try await frame in await stream.frames(accessToken: token) {
                     backoff = 1
                     apply(frame)
@@ -400,10 +441,11 @@ public final class TankMonitor {
     }
 
     // Internal, not private: the staleness tests feed frames through it.
-    func apply(_ frame: StreamFrame) {
-        lastFrameAt = Date()
+    func apply(_ frame: StreamFrame, at now: Date = Date()) {
+        lastFrameAt = now
         switch frame {
         case .ready:
+            liveSince = now
             connection = .live
         case let .sensor(sensor):
             connection = .live
@@ -424,6 +466,10 @@ public final class TankMonitor {
         case let .alert(alert):
             connection = .live
             apply(alert.payload)
+        case let .host(frame):
+            connection = .live
+            host = frame.payload
+            hostAt = now
         case .unknown:
             // A frame kind this build predates. Ignored on purpose — see
             // StreamClient.decode.

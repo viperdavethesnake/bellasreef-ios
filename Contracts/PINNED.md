@@ -6,11 +6,11 @@ reviewable diff rather than something that shifts under the app.
 
 | | |
 |---|---|
-| Backend commit | `c443444` (main after PR #107; the contract change is PR #104) |
-| CI run | [`33912267051`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/33912267051) (`client-contracts` artifact) |
-| Pinned on | 2026-09-09 |
+| Backend commit | `dd31e22` (main after PR #110, the contract change: `host` stream frame) |
+| CI run | [`37099183914`](https://github.com/viperdavethesnake/bellas-reef/actions/runs/37099183914) (`client-contracts` artifact) |
+| Pinned on | 2026-10-02 |
 | OpenAPI | 3.1.0, 29 paths |
-| Contracts version | 4.4.0 |
+| Contracts version | 4.5.0 |
 | Frame schema | v1 |
 
 Pinned from main this time, off the run for the squash-merge commit itself.

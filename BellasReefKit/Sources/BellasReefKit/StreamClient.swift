@@ -17,6 +17,9 @@ public enum StreamFrame: Sendable {
     case state(Components.Schemas.StateFrame)
     case sensor(Components.Schemas.SensorFrame)
     case alert(Components.Schemas.AlertFrame)
+    /// The hub's vitals every 30 s (contracts 4.5.0) — also the end-to-end
+    /// heartbeat behind "Hub not reporting".
+    case host(Components.Schemas.HostFrame)
     /// A frame kind this build does not know. Carried rather than thrown — see
     /// `decode(_:)`.
     case unknown(kind: String)
@@ -205,6 +208,8 @@ public actor StreamClient {
                 return .sensor(try decoder.decode(Components.Schemas.SensorFrame.self, from: data))
             case "alert":
                 return .alert(try decoder.decode(Components.Schemas.AlertFrame.self, from: data))
+            case "host":
+                return .host(try decoder.decode(Components.Schemas.HostFrame.self, from: data))
             default:
                 // Forward compatibility, and a deliberate split from how the
                 // spine behaves.
