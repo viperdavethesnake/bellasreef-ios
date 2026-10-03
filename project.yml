@@ -15,7 +15,7 @@ options:
       file: true
   bundleIdPrefix: com.bellasreef
   deploymentTarget:
-    iOS: "26.0"
+    iOS: "26.1"
   createIntermediateGroups: true
   groupSortPosition: top
 
